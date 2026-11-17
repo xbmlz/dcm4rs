@@ -29,6 +29,12 @@ struct Entry {
 #[test]
 fn pylibjpeg_data_decodes() {
     let Some((root, ds_dir)) = locate() else {
+        // CI always fetches the corpus, so a missing checkout there is a broken job rather than
+        // a reason to pass with nothing decoded.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "pylibjpeg-data is missing in CI; run `sh scripts/fetch-pylibjpeg-data.sh` first"
+        );
         eprintln!("skipping pylibjpeg-data; run `sh scripts/fetch-pylibjpeg-data.sh` to enable it");
         return;
     };
