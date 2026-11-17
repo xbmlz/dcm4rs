@@ -1,12 +1,65 @@
 # dcm4rs
 
-A foundational DICOM library for Rust. Phase one is complete: **data model + data dictionary**.
+[![CI](https://github.com/xbmlz/dcm4rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xbmlz/dcm4rs/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/xbmlz/dcm4rs/branch/main/graph/badge.svg)](https://codecov.io/gh/xbmlz/dcm4rs)
+[![pylibjpeg-data](https://github.com/xbmlz/dcm4rs/actions/workflows/pylibjpeg-data.yml/badge.svg?branch=main)](https://github.com/xbmlz/dcm4rs/actions/workflows/pylibjpeg-data.yml)
+[![crates.io](https://img.shields.io/crates/v/dcm4rs.svg)](https://crates.io/crates/dcm4rs)
+[![docs.rs](https://docs.rs/dcm4rs/badge.svg)](https://docs.rs/dcm4rs)
+[![License](https://img.shields.io/crates/l/dcm4rs.svg)](#license)
+[![MSRV](https://img.shields.io/badge/MSRV-1.75-blue.svg)](#installation)
 
-## Layout
+A pure-Rust DICOM library: data model, PS3.6 dictionary, Part 10 file I/O, and feature-gated
+pixel decoding. The core forbids unsafe code, keeps values as the bytes defined by the standard,
+and leaves third-party codecs behind explicit features so it stays easy to embed in long-lived
+products such as a PACS.
+
+## Installation
+
+```toml
+[dependencies]
+dcm4rs = "0.1"
+```
+
+Rust 1.75 or newer is required. The default `pixel-jpeg` feature decodes 8-bit JPEG; the
+remaining codecs are opt-in:
+
+| Feature | Default | Decoder |
+|---|---|---|
+| `pixel-jpeg` | yes | 8-bit JPEG baseline, extended and progressive via `zune-jpeg` |
+| `pixel-jpegls` | no | JPEG-LS lossless and near-lossless via `charls` (CMake and a C++ toolchain required) |
+| `pixel-j2k` | no | JPEG 2000 / HTJ2K via `jpeg2k` with the pure-Rust `openjp2` port |
+| `pixel-jxl` | no | JPEG XL via `jxl-oxide` |
+
+## Quick start
+
+```rust
+use dcm4rs::dictionary::tags;
+use dcm4rs::{DataSet, Endian, Tag, Value, Vr};
+
+let mut ds = DataSet::new();
+ds.set_string(tags::PATIENT_NAME, Vr::Pn, "Doe^John");
+ds.set_u16(tags::COLUMNS, 512);
+ds.set(tags::PIXEL_DATA, Vr::Ow, Value::from_u16s(&[0, 1]));
+
+assert_eq!(ds.string(tags::PATIENT_NAME).unwrap(), "Doe^John");
+assert_eq!(ds.u16(tags::COLUMNS).unwrap(), 512);
+assert_eq!(ds.get(tags::PATIENT_NAME).unwrap().tag, Tag::new(0x0010, 0x0010));
+
+// Big-endian transfer syntax: bytes are stored big endian and declared when decoding.
+let mut big = DataSet::with_endian(Endian::Big);
+big.set(tags::ROWS, Vr::Us, Value::from_bytes(vec![0x02, 0x00]));
+assert_eq!(big.u16(tags::ROWS).unwrap(), 512);
+
+// Dictionary lookup.
+let entry = dcm4rs::dictionary::lookup(tags::PIXEL_DATA).unwrap();
+assert!(entry.vr.is_ambiguous()); // OB or OW, decided by context
+```
+
+## Workspace layout
 
 ```
 Cargo.toml  virtual workspace
-dcm4rs/     library: data model (Tag / Vr / Value / Element / DataSet) + data dictionary
+dcm4rs/     library: data model (Tag / Vr / Value / Element / DataSet) + dictionary + file I/O
 cli/        command-line package: depends on dcm4rs only, not part of the library's public API
 data/       PS3.6 DocBook source (not committed)
 ```
@@ -43,59 +96,7 @@ needs to be compiled separately, `dcm4rs-dictionary` can be split out then.
    its pure-Rust backend; JPEG decoding uses `zune-jpeg` behind the default `pixel-jpeg` feature,
    JPEG-LS uses `charls` behind the `pixel-jpegls` feature, JPEG 2000 uses `jpeg2k` (with the
    pure-Rust `openjp2` port) behind `pixel-j2k`, JPEG XL uses `jxl-oxide` behind `pixel-jxl`, and
-   further codecs stay feature-gated, so the library stays easy to embed in long-lived products
-   such as a PACS.
-
-## Usage
-
-```rust
-use dcm4rs::dictionary::tags;
-use dcm4rs::{DataSet, Endian, Tag, Value, Vr};
-
-let mut ds = DataSet::new();
-ds.set_string(tags::PATIENT_NAME, Vr::Pn, "Doe^John");
-ds.set_u16(tags::COLUMNS, 512);
-ds.set(tags::PIXEL_DATA, Vr::Ow, Value::from_u16s(&[0, 1]));
-
-assert_eq!(ds.string(tags::PATIENT_NAME).unwrap(), "Doe^John");
-assert_eq!(ds.u16(tags::COLUMNS).unwrap(), 512);
-assert_eq!(ds.get(tags::PATIENT_NAME).unwrap().tag, Tag::new(0x0010, 0x0010));
-
-// Big-endian transfer syntax: bytes are stored big endian and declared when decoding
-let mut big = DataSet::with_endian(Endian::Big);
-big.set(tags::ROWS, Vr::Us, Value::from_bytes(vec![0x02, 0x00]));
-assert_eq!(big.u16(tags::ROWS).unwrap(), 512);
-
-// Dictionary lookup
-let entry = dcm4rs::dictionary::lookup(tags::PIXEL_DATA).unwrap();
-assert!(entry.vr.is_ambiguous()); // OB or OW, decided by context
-```
-
-## Tests and checks
-
-The suites mirror pydicom's test modules one file per module, so behaviour can be compared module
-by module: `tag.rs`, `data_element.rs`, `dataset.rs`, `dictionary.rs`, `file_reader.rs`,
-`file_writer.rs`, `transfer_syntax.rs`. `tests/common/mod.rs` builds the byte fixtures; every
-helper there emits canonical bytes so tests can assert exact output. Where dcm4rs intentionally
-behaves differently from pydicom, the test says so in a comment and the difference is listed
-below.
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets
-```
-
-## Data dictionary
-
-Generated from the official PS3.6 (currently 2026d): 5212 standard elements (retired ones
-included), 88 repeating groups, 5212 tag constants. The generator lives in
-`cli/src/bin/dictgen.rs`; it depends on `dcm4rs` to validate VRs and keeps no second VR list. The
-generated file is committed, so building needs no network access; see
-[data/README.md](data/README.md) to regenerate:
-
-```bash
-cargo run -p cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
-```
+   further codecs stay feature-gated.
 
 ## File I/O
 
@@ -124,11 +125,15 @@ pydicom does. Writing is canonical: sequences get defined lengths, group length 
 dropped and text is padded to even length, so an undefined-length source round-trips semantically
 rather than byte for byte. Deflated (`1.2.840.10008.1.2.1.99`) is inflated with raw DEFLATE on
 read and written back deflated; unknown transfer syntaxes report
-`Error::UnsupportedTransferSyntax`. `DataSet::to_endian` converts numeric values, including
-nested sequence items, to another byte order; text, `OB`/`UN` values and encapsulated fragments
-are copied unchanged. `DataSet::read_with_private_dictionary` and
+`Error::UnsupportedTransferSyntax`.
+
+`DataSet::to_endian` converts numeric values, including nested sequence items, to another byte
+order; text, `OB`/`UN` values and encapsulated fragments are copied unchanged. Ambiguous VRs are
+corrected on write from context. `DataSet::read_with_private_dictionary` and
 `DicomFile::read_with_private_dictionary` resolve private element VRs from a caller-supplied
 `PrivateDictionary`; private creators are read from the stream.
+
+## Pixel data
 
 Pixel data frames are available without decoding through `DicomFile::pixel_frames`, and a
 validated `PixelDescriptor` describes them. RLE Lossless, 8-bit JPEG (baseline / extended /
@@ -139,6 +144,49 @@ progressive), JPEG-LS (lossless / near-lossless), JPEG 2000 / HTJ2K and JPEG XL 
 JPEG-LS is behind the `pixel-jpegls` feature and builds CharLS at compile time, so it needs
 CMake and a C++ toolchain. JPEG 2000 / HTJ2K is behind `pixel-j2k` and uses the pure-Rust
 `openjp2` port; JPEG XL is behind `pixel-jxl` and uses `jxl-oxide`.
+
+## Tests and checks
+
+The suites mirror pydicom's test modules one file per module, so behaviour can be compared
+module by module: `tag.rs`, `data_element.rs`, `dataset.rs`, `dictionary.rs`, `file_reader.rs`,
+`file_writer.rs`, `transfer_syntax.rs`, `pixels.rs`. `tests/common/mod.rs` builds the byte fixtures;
+every helper there emits canonical bytes so tests can assert exact output. Where dcm4rs
+intentionally behaves differently from pydicom, the test says so in a comment and the difference
+is listed below.
+
+```bash
+cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+```
+
+CI runs the same formatting and lint checks, runs the test suite under `cargo-llvm-cov`, and
+uploads the LCOV report to Codecov. Add a `CODECOV_TOKEN` repository secret to enable uploads;
+`fail_ci_if_error` is off so a Codecov outage does not block CI.
+
+The optional `pylibjpeg_data` conformance test decodes the
+[pylibjpeg-data](https://github.com/pydicom/pylibjpeg-data) corpus and compares lossless categories
+byte-for-byte with the uncompressed `_matching_dataset`. The data (about 70 MB) is downloaded on
+demand and is never committed:
+
+```bash
+sh scripts/fetch-pylibjpeg-data.sh
+cargo test --all-features --test pylibjpeg_data -- --nocapture
+```
+
+Without a checkout the test skips. `.github/workflows/pylibjpeg-data.yml` runs the same steps.
+
+## Data dictionary
+
+Generated from the official PS3.6 (currently 2026d): 5212 standard elements (retired ones
+included), 88 repeating groups, 5212 tag constants. The generator lives in
+`cli/src/bin/dictgen.rs`; it depends on `dcm4rs` to validate VRs and keeps no second VR list. The
+generated file is committed, so building needs no network access; see
+[data/README.md](data/README.md) to regenerate:
+
+```bash
+cargo run -p cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
+```
 
 ## Differences from pydicom
 

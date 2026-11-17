@@ -1,0 +1,22 @@
+name: pylibjpeg-data
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch pylibjpeg-data
+        run: sh scripts/fetch-pylibjpeg-data.sh
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/target/pylibjpeg-data
+      - name: Decode corpus
+        run: cargo test --all-features --test pylibjpeg_data -- --nocapture
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/target/pylibjpeg-data
