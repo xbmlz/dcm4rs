@@ -61,6 +61,8 @@ pub enum Error {
     UnsupportedPixelData(String),
     /// The pixel data attributes or an encoded frame are malformed.
     InvalidPixelData(String),
+    /// The value is not a well-formed UID (VR `UI`, PS3.5 6.2).
+    InvalidUid(String),
     /// A file could not be read from disk.
     Io(String),
 }
@@ -111,6 +113,7 @@ impl fmt::Display for Error {
                 write!(f, "unsupported pixel data: {message}")
             }
             Self::InvalidPixelData(message) => write!(f, "invalid pixel data: {message}"),
+            Self::InvalidUid(value) => write!(f, "invalid UID: {value}"),
             Self::Io(message) => write!(f, "I/O error: {message}"),
         }
     }
