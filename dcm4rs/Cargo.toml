@@ -1,0 +1,30 @@
+[package]
+name = "dcm4rs"
+description = "Pure-Rust DICOM data model, data dictionary and file I/O"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = ["crates-io"]
+keywords = ["dicom", "medical", "imaging"]
+categories = ["parser-implementations", "encoding"]
+readme = "../README.md"
+documentation = "https://docs.rs/dcm4rs"
+
+[features]
+default = ["pixel-jpeg"]
+pixel-jpeg = ["dep:zune-jpeg"]
+pixel-jpegls = ["dep:charls"]
+pixel-j2k = ["dep:jpeg2k"]
+pixel-jxl = ["dep:jxl-oxide"]
+
+[dependencies]
+encoding_rs = "0.8"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+charls = { version = "0.4", optional = true }
+jpeg2k = { version = "0.9", optional = true, default-features = false, features = ["openjp2"] }
+jxl-oxide = { version = "0.10", optional = true, default-features = false }
+zune-jpeg = { version = "0.4", optional = true }
+
+[dev-dependencies]
+jpeg-encoder = "0.6"

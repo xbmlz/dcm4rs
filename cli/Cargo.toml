@@ -1,0 +1,11 @@
+[package]
+name = "cli"
+description = "Command-line tools built on dcm4rs (dictionary generator, etc.)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+dcm4rs.workspace = true
