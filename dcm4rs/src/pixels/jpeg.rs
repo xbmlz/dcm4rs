@@ -94,6 +94,14 @@ fn decode_narrow(frame: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decode a frame of more than eight bits per sample into little-endian 16-bit samples.
+///
+/// `oxiarc-jpeg`'s inverse DCT agrees with the libjpeg-turbo one pydicom decodes through
+/// `pylibjpeg-libjpeg` to within one least significant bit: comparing against pydicom 3.0.2 on
+/// the pylibjpeg-data reference files leaves 3612 of 262144 samples off by one for the 1024x256
+/// 12-bit image (`JPEGExtended_1s_1f_u_16_12.dcm`) and 84190 of 3766400 for the 2140x1760 10-bit
+/// one (`RG2_JPLY_fixed.dcm`), and never by more. The marker repair applied before decoding does
+/// not enter these counts: the repaired frames decode to the same samples the untouched
+/// reference files do.
 fn decode_wide(frame: &[u8], descriptor: &PixelDescriptor) -> Result<Vec<u8>> {
     let mut decoder = oxiarc_jpeg::Decoder::new(frame);
     let info = decoder
