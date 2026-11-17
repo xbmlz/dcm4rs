@@ -47,12 +47,15 @@ fn pylibjpeg_data_decodes() {
 
     let mut decoded = 0usize;
     let mut skipped = 0usize;
+    let mut repaired = 0usize;
     let mut failures = Vec::new();
 
     for entry in entries {
+        // Every entry is decoded, including the three the index marks unprocessable: the repairs
+        // in `pixels::jpeg` (a sequential scan whose SOS declares `Se == 0`) and `pixels::j2k`
+        // (a COM segment between the last tile-part and EOC) exist for exactly those files.
         if entry.status != 0 {
-            skipped += 1;
-            continue;
+            repaired += 1;
         }
         let path = ds_dir.join(&entry.rel);
         let file = match DicomFile::read_file(&path) {
@@ -212,7 +215,7 @@ fn pylibjpeg_data_decodes() {
     }
 
     eprintln!(
-        "pylibjpeg-data: decoded {decoded}, skipped {skipped}, failed {}",
+        "pylibjpeg-data: decoded {decoded} (of which {repaired} marked unprocessable), skipped {skipped}, failed {}",
         failures.len()
     );
     assert!(
