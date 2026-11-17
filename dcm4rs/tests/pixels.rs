@@ -10,6 +10,7 @@ use jpeg_encoder::{ColorType, Encoder};
 const RLE_UID: &str = "1.2.840.10008.1.2.5";
 const EXPLICIT_LE_UID: &str = "1.2.840.10008.1.2.1";
 const JPEG_LOSSLESS_UID: &str = "1.2.840.10008.1.2.4.57";
+const MPEG_UID: &str = "1.2.840.10008.1.2.4.100";
 
 fn pixel_set(
     rows: u16,
@@ -163,9 +164,250 @@ fn unsupported_codec_is_reported() {
         Vr::Ob,
         Value::Fragments(vec![Vec::new(), vec![0xFF, 0xD8]]),
     );
-    let file = file(set, JPEG_LOSSLESS_UID);
+    let file = file(set, MPEG_UID);
     assert!(matches!(
         file.decode_frame(0),
+        Err(Error::UnsupportedPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_decodes() {
+    // 3x2, 8-bit: values 100 101 100 / 100 99 100 with predictor 1, so the differences are
+    // -28 +1 -1 / 0 -1 +1 and the first sample is predicted from half the precision.
+    let mut set = pixel_set(3, 2, 1, 8, 1, "MONOCHROME2");
+    let stream = vec![
+        0xFF, 0xD8, // SOI
+        0xFF, 0xC3, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x03, 0x01, 0x01, 0x11, 0x00, // SOF3
+        0xFF, 0xC4, 0x00, 0x16, 0x00, // DHT: categories 0, 1 and 5 as 0, 10 and 110
+        0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x05, //
+        0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, // SOS
+        0xC3, 0xB1, 0x2F, // entropy-coded differences
+        0xFF, 0xD9, // EOI
+    ];
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), stream]),
+    );
+    let file = file(set, JPEG_LOSSLESS_UID);
+    assert_eq!(
+        file.decode_frame(0).unwrap(),
+        vec![100, 101, 100, 100, 99, 100]
+    );
+}
+
+/// Build a JPEG marker segment: `FF marker`, the two-byte length and the body.
+fn jpeg_segment(marker: u8, body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0xFF, marker];
+    bytes.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// SOF3 body for a `height` x `width` frame with components given as (identifier, sampling).
+fn sof3_body(precision: u8, height: u16, width: u16, components: &[(u8, u8)]) -> Vec<u8> {
+    let mut body = vec![precision];
+    body.extend_from_slice(&height.to_be_bytes());
+    body.extend_from_slice(&width.to_be_bytes());
+    body.push(components.len() as u8);
+    for &(identifier, sampling) in components {
+        body.push(identifier);
+        body.push(sampling);
+        body.push(0);
+    }
+    body
+}
+
+/// Huffman table segment for the difference categories with `counts` codes per length.
+fn dht_segment(class: u8, table: u8, counts: [u8; 16], symbols: &[u8]) -> Vec<u8> {
+    let mut body = vec![(class << 4) | table];
+    body.extend_from_slice(&counts);
+    body.extend_from_slice(symbols);
+    jpeg_segment(0xC4, &body)
+}
+
+/// Scan header for the components given as (identifier, table selector).
+fn sos_segment(predictor: u8, transform: u8, selectors: &[(u8, u8)]) -> Vec<u8> {
+    let mut body = vec![selectors.len() as u8];
+    for &(identifier, table) in selectors {
+        body.push(identifier);
+        body.push(table);
+    }
+    body.push(predictor);
+    body.push(0);
+    body.push(transform);
+    jpeg_segment(0xDA, &body)
+}
+
+/// Assemble a JPEG Lossless file from a codestream.
+fn lossless_file(rows: u16, columns: u16, samples: u16, bits: u16, stream: Vec<u8>) -> DicomFile {
+    let mut set = pixel_set(
+        rows,
+        columns,
+        samples,
+        bits,
+        1,
+        if samples == 1 { "MONOCHROME2" } else { "RGB" },
+    );
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), stream]),
+    );
+    file(set, JPEG_LOSSLESS_UID)
+}
+
+#[test]
+fn jpeg_lossless_restart_intervals_reset_the_prediction() {
+    // 2x2, 8-bit: 128 129 / 128 129 with predictor 2 and a restart after every sample, so each
+    // sample is predicted from the sample above alone.
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    counts[1] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 2, 2, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0, 1]));
+    stream.extend(jpeg_segment(0xDD, &[0x00, 0x01]));
+    stream.extend(sos_segment(2, 0, &[(1, 0)]));
+    stream.extend([0x7F, 0xFF, 0xD0, 0xBF, 0xFF, 0xD1, 0x7F, 0xFF, 0xD2, 0x7F]);
+    stream.extend([0xFF, 0xD9]);
+    assert_eq!(
+        lossless_file(2, 2, 1, 8, stream).decode_frame(0).unwrap(),
+        vec![128, 129, 128, 129]
+    );
+}
+
+#[test]
+fn jpeg_lossless_rejects_a_point_transform() {
+    // A non-zero successive approximation is a point transform this decoder does not apply.
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    counts[15] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(16, 1, 1, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0, 15]));
+    stream.extend(sos_segment(1, 0x01, &[(1, 0)]));
+    stream.extend([0x80, 0x00, 0x00, 0x01]);
+    stream.extend([0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 1, 1, 16, stream).decode_frame(0),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_decodes_interleaved_components() {
+    // 1x1 with three components, each coding a difference of zero from half the precision.
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(
+        0xC3,
+        &sof3_body(8, 1, 1, &[(1, 0x11), (2, 0x11), (3, 0x11)]),
+    ));
+    for table in 0..3 {
+        stream.extend(dht_segment(0, table, counts, &[0]));
+    }
+    stream.extend(sos_segment(1, 0, &[(1, 0), (2, 1), (3, 2)]));
+    stream.extend([0x1F]);
+    stream.extend([0xFF, 0xD9]);
+    assert_eq!(
+        lossless_file(1, 1, 3, 8, stream).decode_frame(0).unwrap(),
+        vec![128, 128, 128]
+    );
+}
+
+#[test]
+fn jpeg_lossless_keeps_a_stream_that_ends_early() {
+    // 1x2 but only one sample is coded; the rest of the image stays zero.
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    counts[1] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 1, 2, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0, 1]));
+    stream.extend(sos_segment(1, 0, &[(1, 0)]));
+    stream.extend([0x7F]);
+    stream.extend([0xFF, 0xD9]);
+    assert_eq!(
+        lossless_file(1, 2, 1, 8, stream).decode_frame(0).unwrap(),
+        vec![128, 0]
+    );
+}
+
+#[test]
+fn jpeg_lossless_rejects_a_lossy_start_of_frame() {
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC0, &sof3_body(8, 1, 1, &[(1, 0x11)])));
+    stream.extend([0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 1, 1, 8, stream).decode_frame(0),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_rejects_an_unknown_predictor() {
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 1, 1, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0]));
+    stream.extend(sos_segment(0, 0, &[(1, 0)]));
+    stream.extend([0x1F]);
+    stream.extend([0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 1, 1, 8, stream).decode_frame(0),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_rejects_a_missing_huffman_table() {
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 1, 1, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0]));
+    stream.extend(sos_segment(1, 0, &[(1, 1)]));
+    stream.extend([0x1F]);
+    stream.extend([0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 1, 1, 8, stream).decode_frame(0),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_rejects_a_marker_where_a_restart_was_due() {
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 1, 2, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0]));
+    stream.extend(jpeg_segment(0xDD, &[0x00, 0x01]));
+    stream.extend(sos_segment(1, 0, &[(1, 0)]));
+    stream.extend([0x1F, 0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 2, 1, 8, stream).decode_frame(0),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[test]
+fn jpeg_lossless_rejects_a_scan_that_does_not_cover_the_frame() {
+    let mut counts = [0u8; 16];
+    counts[0] = 1;
+    let mut stream = vec![0xFF, 0xD8];
+    stream.extend(jpeg_segment(0xC3, &sof3_body(8, 1, 1, &[(1, 0x11)])));
+    stream.extend(dht_segment(0, 0, counts, &[0]));
+    stream.extend(sos_segment(1, 0, &[(1, 0), (2, 0)]));
+    stream.extend([0x1F]);
+    stream.extend([0xFF, 0xD9]);
+    assert!(matches!(
+        lossless_file(1, 1, 2, 8, stream).decode_frame(0),
         Err(Error::UnsupportedPixelData(_))
     ));
 }

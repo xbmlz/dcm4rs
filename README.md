@@ -33,6 +33,9 @@ codecs are opt-in:
 | `pixel-j2k` | no | JPEG 2000 / HTJ2K via `jpeg2k` with the pure-Rust `openjp2` port |
 | `pixel-jxl` | no | JPEG XL via `jxl-oxide` |
 
+JPEG Lossless (Process 14 and Selection Value 1) needs no feature: it is pure Rust in the core,
+next to RLE Lossless.
+
 ## Quick start
 
 ```rust
@@ -85,7 +88,8 @@ let pixels = file.decode_frame(0).unwrap();
 println!("{}x{}, {} bytes", descriptor.columns, descriptor.rows, pixels.len());
 ```
 
-RLE Lossless, 8-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are decoded. Frames follow the
+RLE Lossless, JPEG Lossless, 8-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are decoded with
+8, 12, 14, 15 or 16-bit samples. Frames follow the
 Basic Offset Table and may span several fragments; an empty table falls back to
 `Number of Frames` and JPEG end-of-image markers, as pydicom does. Codestream precision that
 differs from `Bits Stored` is accepted, again matching pydicom.
@@ -135,12 +139,13 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 ## Status
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
-private dictionary registration, RLE / 8-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
+private dictionary registration, RLE / JPEG Lossless / 8-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL
+decoding.
 
 Not implemented yet:
 
-- JPEG lossless, 12-bit JPEG and MPEG pixel data; those frames are carried through compressed and
-  report `Error::UnsupportedPixelData` on decode.
+- 12-bit JPEG and MPEG pixel data; those frames are carried through compressed and report
+  `Error::UnsupportedPixelData` on decode.
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
 - Python-side conveniences such as JSON, deferred reads, `private_block` and typed value classes.
 

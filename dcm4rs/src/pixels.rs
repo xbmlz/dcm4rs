@@ -5,8 +5,9 @@
 //! from native Pixel Data by their fixed size, or from encapsulated Pixel Data by the Basic
 //! Offset Table (one fragment per frame when the table is empty).
 //!
-//! RLE Lossless (PS3.5 Annex G) is decoded here. JPEG, JPEG-LS, JPEG 2000/HTJ2K and JPEG XL are
-//! feature-gated additions; MPEG reports [`Error::UnsupportedPixelData`].
+//! RLE Lossless (PS3.5 Annex G) and JPEG Lossless (Process 14) are decoded here. JPEG, JPEG-LS,
+//! JPEG 2000/HTJ2K and JPEG XL are feature-gated additions; MPEG reports
+//! [`Error::UnsupportedPixelData`].
 
 use std::fmt;
 
@@ -20,6 +21,7 @@ use crate::transfer_syntax::TransferSyntax;
 mod j2k;
 #[cfg(feature = "pixel-jpeg")]
 mod jpeg;
+mod jpeg_lossless;
 #[cfg(feature = "pixel-jpegls")]
 mod jpegls;
 #[cfg(feature = "pixel-jxl")]
@@ -449,6 +451,9 @@ fn decode_frame_bytes(
         if uid == "1.2.840.10008.1.2.5" {
             return rle::decode(frame, descriptor);
         }
+        if is_jpeg_lossless_uid(uid) {
+            return jpeg_lossless::decode(frame, descriptor);
+        }
         #[cfg(feature = "pixel-jpeg")]
         if is_jpeg_uid(uid) {
             return jpeg::decode(frame, descriptor);
@@ -472,9 +477,14 @@ fn decode_frame_bytes(
     Ok(frame.to_vec())
 }
 
+/// JPEG Lossless (Process 14) and Process 14 Selection Value 1 (`.57`, `.70`).
+fn is_jpeg_lossless_uid(uid: &str) -> bool {
+    matches!(uid, "1.2.840.10008.1.2.4.57" | "1.2.840.10008.1.2.4.70")
+}
+
 /// JPEG Baseline (Process 1), Extended (Process 2/4), Spectral Selection and Full Progression.
 ///
-/// JPEG Lossless (Process 14) and JPEG-LS are different codecs and stay unsupported.
+/// JPEG Lossless is decoded by [`jpeg_lossless`] and JPEG-LS is a different codec.
 #[cfg(feature = "pixel-jpeg")]
 fn is_jpeg_uid(uid: &str) -> bool {
     matches!(
