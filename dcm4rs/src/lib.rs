@@ -51,6 +51,7 @@ mod vr;
 mod writer;
 
 pub mod dictionary;
+pub mod encaps;
 pub mod pixels;
 
 pub use charset::Charset;
