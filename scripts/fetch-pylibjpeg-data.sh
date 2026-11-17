@@ -8,7 +8,12 @@ set -eu
 
 ROOT="${PYLIBJPEG_DATA_DIR:-$PWD/target/pylibjpeg-data}"
 
-if [ ! -d "$ROOT/ljdata/ds" ]; then
+# An existing directory is not proof of a usable corpus: a restored build cache can leave an
+# empty tree behind, so look for the DICOM files themselves before reusing it.
+if [ -d "$ROOT/ljdata/ds" ] && find "$ROOT/ljdata/ds" -name '*.dcm' -print -quit | grep -q .; then
+    :
+else
+    rm -rf "$ROOT"
     mkdir -p "$(dirname "$ROOT")"
     if command -v git >/dev/null 2>&1; then
         git clone --depth 1 https://github.com/pydicom/pylibjpeg-data.git "$ROOT"

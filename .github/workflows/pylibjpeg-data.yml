@@ -15,8 +15,8 @@ jobs:
       - name: Fetch pylibjpeg-data
         run: sh scripts/fetch-pylibjpeg-data.sh
         env:
-          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/target/pylibjpeg-data
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
       - name: Decode corpus
         run: cargo test --all-features --test pylibjpeg_data -- --nocapture
         env:
-          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/target/pylibjpeg-data
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
