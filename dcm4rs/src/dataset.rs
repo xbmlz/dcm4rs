@@ -8,6 +8,7 @@ use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::tag::Tag;
 use crate::value::Value;
+use crate::valuerep::{DecimalString, IntegerString, PersonName};
 use crate::vr::Vr;
 
 /// An ordered collection of data elements, corresponding to one DICOM Data Set or one Item.
@@ -185,6 +186,43 @@ impl DataSet {
         self.element(tag)?.decimal_values()
     }
 
+    /// Read the first person name (`PN`), decoded with the data set's character set.
+    pub fn person_name(&self, tag: Tag) -> Result<PersonName> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Pn, "PN")?;
+        let values = self.strings(tag)?;
+        let text = values.first().ok_or(Error::NoValue(tag))?;
+        PersonName::parse(text)
+    }
+
+    /// Read every decimal string (`DS`), keeping the text each value was written as.
+    pub fn decimal_strings(&self, tag: Tag) -> Result<Vec<DecimalString>> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Ds, "DS")?;
+        let mut values = Vec::new();
+        for part in self.strings(tag)? {
+            if part.trim().is_empty() {
+                continue;
+            }
+            values.push(DecimalString::parse(&part)?);
+        }
+        Ok(values)
+    }
+
+    /// Read every integer string (`IS`), keeping the text each value was written as.
+    pub fn integer_strings(&self, tag: Tag) -> Result<Vec<IntegerString>> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Is, "IS")?;
+        let mut values = Vec::new();
+        for part in self.strings(tag)? {
+            if part.trim().is_empty() {
+                continue;
+            }
+            values.push(IntegerString::parse(&part)?);
+        }
+        Ok(values)
+    }
+
     /// Read sequence items.
     pub fn sequence(&self, tag: Tag) -> Result<&[DataSet]> {
         self.element(tag)?.as_sequence()
@@ -204,4 +242,15 @@ impl DataSet {
     pub fn set_sequence(&mut self, tag: Tag, items: Vec<DataSet>) {
         self.set(tag, Vr::Sq, Value::sequence(items));
     }
+}
+
+/// Reject an element whose VR is not the one the accessor expects.
+fn require_vr(element: &Element, vr: Vr, name: &'static str) -> Result<()> {
+    if element.vr != vr {
+        return Err(Error::WrongVr {
+            actual: element.vr,
+            expected: name,
+        });
+    }
+    Ok(())
 }

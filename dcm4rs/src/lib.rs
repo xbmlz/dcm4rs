@@ -54,6 +54,7 @@ pub mod dictionary;
 pub mod encaps;
 pub mod pixels;
 pub mod uid;
+pub mod valuerep;
 
 pub use charset::Charset;
 pub use dataset::DataSet;
@@ -69,4 +70,5 @@ pub use tag::Tag;
 pub use transfer_syntax::TransferSyntax;
 pub use uid::Uid;
 pub use value::Value;
+pub use valuerep::{DecimalString, IntegerString, PersonName};
 pub use vr::Vr;
