@@ -90,12 +90,9 @@ fn decode_segment(bytes: &[u8], expected: usize) -> Result<Vec<u8>> {
         match control {
             0..=127 => {
                 let count = usize::from(control) + 1;
-                let end = cursor + count;
-                if end > bytes.len() {
-                    return Err(Error::InvalidPixelData(
-                        "RLE segment ends inside a literal run".to_owned(),
-                    ));
-                }
+                // A literal run may be cut short by the segment boundary or by padding;
+                // pydicom copies whatever bytes remain instead of reporting an error.
+                let end = (cursor + count).min(bytes.len());
                 out.extend_from_slice(&bytes[cursor..end]);
                 cursor = end;
             }
@@ -103,9 +100,7 @@ fn decode_segment(bytes: &[u8], expected: usize) -> Result<Vec<u8>> {
             _ => {
                 let count = 257 - usize::from(control);
                 let Some(&value) = bytes.get(cursor) else {
-                    return Err(Error::InvalidPixelData(
-                        "RLE segment ends before a repeat value".to_owned(),
-                    ));
+                    break;
                 };
                 cursor += 1;
                 let new_len = out.len() + count;

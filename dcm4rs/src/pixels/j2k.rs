@@ -1,6 +1,6 @@
 //! JPEG 2000 and HTJ2K decoding via `jpeg2k` (the pure-Rust `openjp2` port by default).
 
-use super::{PixelDescriptor, PixelRepresentation};
+use super::PixelDescriptor;
 use crate::error::{Error, Result};
 
 /// Decode one encapsulated JPEG 2000 / HTJ2K frame.
@@ -28,22 +28,13 @@ pub(super) fn decode(frame: &[u8], descriptor: &PixelDescriptor) -> Result<Vec<u
     let components = image.components();
     let pixel_count = usize::from(descriptor.rows) * usize::from(descriptor.columns);
     let bytes_per_sample = descriptor.bytes_per_sample();
-    let signed = descriptor.pixel_representation == PixelRepresentation::Signed;
     let mut out = vec![0u8; pixel_count * components.len() * bytes_per_sample];
 
     for (sample, component) in components.iter().enumerate() {
-        if component.precision() != u32::from(descriptor.bits_stored) {
-            return Err(Error::InvalidPixelData(format!(
-                "JPEG 2000 component {sample} has precision {}, Bits Stored is {}",
-                component.precision(),
-                descriptor.bits_stored
-            )));
-        }
-        if component.is_signed() != signed {
-            return Err(Error::InvalidPixelData(format!(
-                "JPEG 2000 component {sample} signedness disagrees with Pixel Representation"
-            )));
-        }
+        // The codestream precision and signedness are not validated against Bits Stored and
+        // Pixel Representation: pydicom decodes the corpus files whose SIZ marker disagrees
+        // with the data set, and the samples are interpreted as the codestream declares them.
+        let signed = component.is_signed();
         let data = component.data();
         if data.len() != pixel_count {
             return Err(Error::InvalidPixelData(format!(
