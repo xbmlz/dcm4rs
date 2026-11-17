@@ -92,6 +92,7 @@ impl Huffman {
 ///
 /// The corpus carries a stream that ends before the image is complete, which decoders tolerate;
 /// anything else is a malformed stream and stays an error.
+#[derive(Debug)]
 enum Failure {
     /// The entropy-coded data ended or a marker appeared where a sample was due.
     Ended,
@@ -607,5 +608,78 @@ fn predict(
                 _ => (left + above) / 2,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extend_reads_signed_magnitudes() {
+        assert_eq!(extend(0, 1), -1);
+        assert_eq!(extend(1, 1), 1);
+        assert_eq!(extend(0, 16), -65535);
+        assert_eq!(extend(32768, 16), 32768);
+    }
+
+    #[test]
+    fn predictors_follow_the_selection_value() {
+        let predicted = |selection| predict(selection, Some(10), Some(20), Some(30), 128);
+        assert_eq!(predicted(1), 10);
+        assert_eq!(predicted(2), 20);
+        assert_eq!(predicted(3), 30);
+        assert_eq!(predicted(4), 0);
+        assert_eq!(predicted(5), 5);
+        assert_eq!(predicted(6), 10);
+        assert_eq!(predicted(7), 15);
+    }
+
+    #[test]
+    fn prediction_at_the_edges_uses_the_available_neighbour() {
+        assert_eq!(predict(1, None, None, None, 128), 128);
+        assert_eq!(predict(1, None, Some(20), None, 128), 20);
+        assert_eq!(predict(1, Some(10), None, None, 128), 10);
+        assert_eq!(predict(3, Some(10), Some(20), None, 128), 0);
+    }
+
+    #[test]
+    fn huffman_tables_reject_an_ac_class() {
+        assert!(matches!(
+            Huffman::from_segment(0x10, &[0u8; 16], &[]),
+            Err(Error::InvalidPixelData(_))
+        ));
+    }
+
+    #[test]
+    fn huffman_tables_reject_a_symbol_count_mismatch() {
+        let mut counts = [0u8; 16];
+        counts[0] = 1;
+        assert!(Huffman::from_segment(0x00, &counts, &[]).is_err());
+    }
+
+    #[test]
+    fn huffman_tables_reject_an_over_subscribed_table() {
+        let mut counts = [0u8; 16];
+        counts[0] = 3;
+        assert!(Huffman::from_segment(0x00, &counts, &[0, 1, 2]).is_err());
+    }
+
+    #[test]
+    fn huffman_decodes_a_symbol_from_its_code() {
+        let mut counts = [0u8; 16];
+        counts[0] = 1;
+        counts[1] = 1;
+        let table = Huffman::from_segment(0x00, &counts, &[0, 1]).unwrap();
+        let mut bits = Bits::new(&[0b0100_0000]);
+        assert_eq!(table.decode(&mut bits).unwrap(), 0);
+        assert_eq!(table.decode(&mut bits).unwrap(), 1);
+    }
+
+    #[test]
+    fn huffman_reports_a_code_it_cannot_match() {
+        let table = Huffman::from_segment(0x00, &[0u8; 16], &[]).unwrap();
+        let mut bits = Bits::new(&[0x00, 0x00]);
+        assert!(matches!(table.decode(&mut bits), Err(Failure::Invalid(_))));
     }
 }
