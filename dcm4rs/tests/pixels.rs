@@ -534,6 +534,64 @@ fn jpeg_extended_12bit_decodes() {
     );
 }
 
+/// Rewrite the first `SOS` segment's spectral end as an encoder in the field would.
+#[cfg(feature = "pixel-jpeg")]
+fn zero_spectral_end(frame: &mut [u8]) {
+    let sos = frame
+        .windows(2)
+        .position(|pair| pair == [0xFF, 0xDA])
+        .expect("SOS marker");
+    let components = usize::from(frame[sos + 4]);
+    frame[sos + 5 + 2 * components + 1] = 0;
+}
+
+#[cfg(feature = "pixel-jpeg")]
+#[test]
+fn jpeg_sequential_scan_with_a_zero_spectral_end_decodes() {
+    // T.81 wants `Se == 63`; files in the wild carry `Se == 0`, and libjpeg warns and decodes.
+    // `pylibjpeg-data` publishes a fixed copy of such a file that differs in this byte alone,
+    // so a repaired decode has to equal the untouched one exactly.
+    let width = 8u16;
+    let height = 8u16;
+    let samples: Vec<u16> = (0..u32::from(width) * u32::from(height))
+        .map(|index| ((index * 397) % 4096) as u16)
+        .collect();
+    let options = oxiarc_jpeg::EncodeOptions {
+        precision: 12,
+        ..Default::default()
+    };
+    let frame = oxiarc_jpeg::encode_u16_to_vec_with_options(
+        &samples,
+        width,
+        height,
+        oxiarc_jpeg::InputColor::Luma,
+        &options,
+    )
+    .expect("encode a 12-bit JPEG");
+    let mut broken = frame.clone();
+    zero_spectral_end(&mut broken);
+    let clean = jpeg_extended_file(width, height, &frame)
+        .decode_frame(0)
+        .expect("decode the encoder's own stream");
+    let repaired = jpeg_extended_file(width, height, &broken)
+        .decode_frame(0)
+        .expect("decode the stream with a zero spectral end");
+    assert_eq!(repaired, clean);
+}
+
+#[cfg(feature = "pixel-jpeg")]
+fn jpeg_extended_file(rows: u16, columns: u16, frame: &[u8]) -> DicomFile {
+    let mut set = pixel_set(rows, columns, 1, 16, 1, "MONOCHROME2");
+    let _ = set.set(tags::BITS_STORED, Vr::Us, Value::from_u16s(&[12]));
+    let _ = set.set(tags::HIGH_BIT, Vr::Us, Value::from_u16s(&[11]));
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), frame.to_vec()]),
+    );
+    file(set, "1.2.840.10008.1.2.4.51")
+}
+
 #[cfg(feature = "pixel-jpeg")]
 #[test]
 fn jpeg_rejects_malformed_stream() {
