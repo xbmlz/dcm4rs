@@ -5,8 +5,9 @@
 //! from native Pixel Data by their fixed size, or from encapsulated Pixel Data by the Basic
 //! Offset Table (one fragment per frame when the table is empty).
 //!
-//! RLE Lossless (PS3.5 Annex G) and JPEG Lossless (Process 14) are decoded here. JPEG, JPEG-LS,
-//! JPEG 2000/HTJ2K and JPEG XL are feature-gated additions; MPEG reports
+//! RLE Lossless (PS3.5 Annex G) and JPEG Lossless (Process 14) are decoded here. JPEG
+//! (eight-bit baseline and progressive, and the 12-bit extended process), JPEG-LS, JPEG
+//! 2000/HTJ2K and JPEG XL are feature-gated additions; MPEG reports
 //! [`Error::UnsupportedPixelData`].
 
 use std::fmt;
