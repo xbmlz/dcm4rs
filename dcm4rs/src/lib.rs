@@ -53,6 +53,7 @@ mod writer;
 pub mod dictionary;
 pub mod encaps;
 pub mod pixels;
+pub mod uid;
 
 pub use charset::Charset;
 pub use dataset::DataSet;
@@ -66,5 +67,6 @@ pub use pixels::{
 pub use private_dict::PrivateDictionary;
 pub use tag::Tag;
 pub use transfer_syntax::TransferSyntax;
+pub use uid::Uid;
 pub use value::Value;
 pub use vr::Vr;
