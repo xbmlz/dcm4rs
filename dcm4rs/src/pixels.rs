@@ -278,7 +278,7 @@ impl DataSet {
         }
         let basic_offset_table = &fragments[0];
         if basic_offset_table.is_empty() {
-            return Ok(fragments[1..].to_vec());
+            return self.frameless_encapsulated_frames(&fragments[1..]);
         }
         if basic_offset_table.len() % 4 != 0 {
             return Err(Error::InvalidPixelData(format!(
@@ -290,25 +290,80 @@ impl DataSet {
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize)
             .collect();
-        if offsets.first() != Some(&0) {
-            return Err(Error::InvalidPixelData(
-                "Basic Offset Table does not start at zero".to_owned(),
-            ));
-        }
-        let data: Vec<u8> = fragments[1..]
-            .iter()
-            .flat_map(|fragment| fragment.iter().copied())
-            .collect();
-        let mut frames = Vec::with_capacity(offsets.len());
-        for (index, &start) in offsets.iter().enumerate() {
-            let end = offsets.get(index + 1).copied().unwrap_or(data.len());
-            if start > end || end > data.len() {
-                return Err(Error::InvalidPixelData(format!(
-                    "Basic Offset Table entry {start}..{end} exceeds {} fragment bytes",
-                    data.len()
-                )));
+        // The offsets are measured from the first fragment's item tag, so each fragment
+        // contributes its value plus the 8-byte item tag and length. Frames may span several
+        // fragments; the table only marks the frame boundaries. This mirrors pydicom's
+        // `generate_fragmented_frames`.
+        let fragments = &fragments[1..];
+        let final_index = offsets.len() - 1;
+        let mut frames = Vec::new();
+        let mut frame = Vec::new();
+        let mut current = 0usize;
+        let mut stream_offset = 0usize;
+        for fragment in fragments {
+            if current == final_index {
+                frame.extend_from_slice(fragment);
+                stream_offset += fragment.len() + 8;
+                continue;
             }
-            frames.push(data[start..end].to_vec());
+            if stream_offset < offsets[current + 1] {
+                frame.extend_from_slice(fragment);
+            } else {
+                frames.push(std::mem::take(&mut frame));
+                current += 1;
+                frame = fragment.clone();
+            }
+            stream_offset += fragment.len() + 8;
+        }
+        if !frame.is_empty() || frames.is_empty() {
+            frames.push(frame);
+        }
+        Ok(frames)
+    }
+
+    /// Split fragments into frames when the Basic Offset Table is empty.
+    ///
+    /// Mirrors pydicom's `generate_fragmented_frames`: a single fragment is one frame,
+    /// `Number of Frames` equal to the fragment count means one fragment per frame, one frame
+    /// means every fragment belongs to it, and otherwise a JPEG end-of-image marker (`FF D9`)
+    /// near the end of a fragment closes a frame.
+    fn frameless_encapsulated_frames(&self, fragments: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+        if fragments.is_empty() {
+            return Ok(Vec::new());
+        }
+        let number_of_frames = match self.get(tags::NUMBER_OF_FRAMES) {
+            Some(element) => {
+                let text = element.string()?.trim();
+                text.parse::<u32>().map_err(|_| {
+                    Error::InvalidPixelData(format!("invalid Number of Frames: {text:?}"))
+                })?
+            }
+            None => 1,
+        }
+        .max(1) as usize;
+        if fragments.len() == 1 || number_of_frames == 1 {
+            return Ok(vec![fragments.concat()]);
+        }
+        if fragments.len() == number_of_frames {
+            return Ok(fragments.to_vec());
+        }
+        if fragments.len() < number_of_frames {
+            return Err(Error::InvalidPixelData(format!(
+                "encapsulated Pixel Data has {} fragments for {number_of_frames} frames",
+                fragments.len()
+            )));
+        }
+        let mut frames = Vec::new();
+        let mut frame = Vec::new();
+        for fragment in fragments {
+            frame.extend_from_slice(fragment);
+            let tail = &fragment[fragment.len().saturating_sub(10)..];
+            if tail.windows(2).any(|pair| pair == [0xFF, 0xD9]) {
+                frames.push(std::mem::take(&mut frame));
+            }
+        }
+        if !frame.is_empty() {
+            frames.push(frame);
         }
         Ok(frames)
     }

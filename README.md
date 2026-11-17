@@ -138,8 +138,15 @@ corrected on write from context. `DataSet::read_with_private_dictionary` and
 Pixel data frames are available without decoding through `DicomFile::pixel_frames`, and a
 validated `PixelDescriptor` describes them. RLE Lossless, 8-bit JPEG (baseline / extended /
 progressive), JPEG-LS (lossless / near-lossless), JPEG 2000 / HTJ2K and JPEG XL are decoded by
-`DicomFile::decode_frame` and `decode_pixel_data`; JPEG lossless and MPEG report
+`DicomFile::decode_frame` and `decode_pixel_data`; JPEG lossless, 12-bit JPEG and MPEG report
 `Error::UnsupportedPixelData`.
+
+Encapsulated frames follow the Basic Offset Table, whose offsets count the 8-byte item tag and
+length of every fragment; frames that span several 64 KiB fragments therefore reassemble
+correctly. An empty table falls back to `Number of Frames` and, when it cannot be trusted, to
+JPEG end-of-image markers, as pydicom does. RLE segments that are cut short or padded are decoded
+to whatever bytes the stream holds, and codestream precision that differs from `Bits Stored` is
+accepted rather than rejected: the corpus contains such files and pydicom decodes them too.
 
 JPEG-LS is behind the `pixel-jpegls` feature and builds CharLS at compile time, so it needs
 CMake and a C++ toolchain. JPEG 2000 / HTJ2K is behind `pixel-j2k` and uses the pure-Rust

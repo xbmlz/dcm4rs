@@ -13,13 +13,15 @@ pub(super) fn decode(frame: &[u8], descriptor: &PixelDescriptor) -> Result<Vec<u
     let info = header
         .get_frame_info(frame)
         .map_err(|err| Error::InvalidPixelData(format!("JPEG-LS header failed: {err}")))?;
+    // Only the geometry is validated. The precision in the codestream does not always equal
+    // Bits Stored in real data (the corpus has 10, 12 and 15-bit streams in 16-bit datasets)
+    // and pydicom decodes those without complaint.
     if info.width != u32::from(descriptor.columns)
         || info.height != u32::from(descriptor.rows)
         || info.component_count != i32::from(descriptor.samples_per_pixel)
-        || info.bits_per_sample != i32::from(descriptor.bits_allocated)
     {
         return Err(Error::InvalidPixelData(format!(
-            "JPEG-LS frame is {}x{} with {} component(s) at {} bit(s), descriptor is {}x{} with {} component(s) at {} bit(s)",
+            "JPEG-LS frame is {}x{} with {} component(s) at {} bit(s), descriptor is {}x{} with {} component(s) at {} stored bit(s)",
             info.width,
             info.height,
             info.component_count,
@@ -27,7 +29,7 @@ pub(super) fn decode(frame: &[u8], descriptor: &PixelDescriptor) -> Result<Vec<u
             descriptor.columns,
             descriptor.rows,
             descriptor.samples_per_pixel,
-            descriptor.bits_allocated
+            descriptor.bits_stored
         )));
     }
 
