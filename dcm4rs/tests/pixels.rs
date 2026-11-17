@@ -10,6 +10,7 @@ use jpeg_encoder::{ColorType, Encoder};
 const RLE_UID: &str = "1.2.840.10008.1.2.5";
 const EXPLICIT_LE_UID: &str = "1.2.840.10008.1.2.1";
 const JPEG_LOSSLESS_UID: &str = "1.2.840.10008.1.2.4.57";
+const MPEG_UID: &str = "1.2.840.10008.1.2.4.100";
 
 fn pixel_set(
     rows: u16,
@@ -163,11 +164,38 @@ fn unsupported_codec_is_reported() {
         Vr::Ob,
         Value::Fragments(vec![Vec::new(), vec![0xFF, 0xD8]]),
     );
-    let file = file(set, JPEG_LOSSLESS_UID);
+    let file = file(set, MPEG_UID);
     assert!(matches!(
         file.decode_frame(0),
         Err(Error::UnsupportedPixelData(_))
     ));
+}
+
+#[test]
+fn jpeg_lossless_decodes() {
+    // 3x2, 8-bit: values 100 101 100 / 100 99 100 with predictor 1, so the differences are
+    // -28 +1 -1 / 0 -1 +1 and the first sample is predicted from half the precision.
+    let mut set = pixel_set(3, 2, 1, 8, 1, "MONOCHROME2");
+    let stream = vec![
+        0xFF, 0xD8, // SOI
+        0xFF, 0xC3, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x03, 0x01, 0x01, 0x11, 0x00, // SOF3
+        0xFF, 0xC4, 0x00, 0x16, 0x00, // DHT: categories 0, 1 and 5 as 0, 10 and 110
+        0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x05, //
+        0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, // SOS
+        0xC3, 0xB1, 0x2F, // entropy-coded differences
+        0xFF, 0xD9, // EOI
+    ];
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), stream]),
+    );
+    let file = file(set, JPEG_LOSSLESS_UID);
+    assert_eq!(
+        file.decode_frame(0).unwrap(),
+        vec![100, 101, 100, 100, 99, 100]
+    );
 }
 
 #[test]

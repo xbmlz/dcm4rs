@@ -48,10 +48,6 @@ fn pylibjpeg_data_decodes() {
             skipped += 1;
             continue;
         }
-        if skip_category(&entry.rel) {
-            skipped += 1;
-            continue;
-        }
         let path = ds_dir.join(&entry.rel);
         let file = match DicomFile::read_file(&path) {
             Ok(file) => file,
@@ -100,7 +96,7 @@ fn pylibjpeg_data_decodes() {
                 continue;
             }
         }
-        if let Some(columns) = entry.columns {
+        if let Some(columns) = indexed_columns(&entry.rel, entry.columns) {
             if descriptor.columns != columns {
                 failures.push(format!(
                     "{}: Columns {} != index {columns}",
@@ -355,17 +351,23 @@ fn category(rel: &Path) -> Option<&str> {
         .and_then(|name| name.to_str())
 }
 
-fn skip_category(rel: &Path) -> bool {
-    matches!(
-        category(rel),
-        Some("JPEGLossless") | Some("JPEGLosslessSV1")
-    )
+/// Geometry the index gets wrong: `Columns` for this dataset is 1024 in the data set and in both
+/// codestreams, while the index lists 1027.
+fn indexed_columns(rel: &Path, columns: Option<u16>) -> Option<u16> {
+    match rel.file_name().and_then(|name| name.to_str()) {
+        Some("JPEGLosslessP14SV1_3s_2f_u_08_08.dcm") => Some(1024),
+        _ => columns,
+    }
 }
 
 fn is_lossless_category(rel: &Path) -> bool {
     matches!(
         category(rel),
-        Some("RLELossless") | Some("JPEG2000Lossless") | Some("JPEGLSLossless")
+        Some("RLELossless")
+            | Some("JPEG2000Lossless")
+            | Some("JPEGLSLossless")
+            | Some("JPEGLossless")
+            | Some("JPEGLosslessSV1")
     )
 }
 
@@ -382,6 +384,7 @@ fn is_jpeg_uid(uid: &str) -> bool {
 
 fn decoder_available(uid: &str) -> bool {
     match uid {
+        "1.2.840.10008.1.2.4.57" | "1.2.840.10008.1.2.4.70" => true,
         "1.2.840.10008.1.2.4.50" | "1.2.840.10008.1.2.4.51" => {
             cfg!(feature = "pixel-jpeg")
         }
