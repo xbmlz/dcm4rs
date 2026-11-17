@@ -18,6 +18,16 @@ jobs:
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - name: Cache pylibjpeg-data
+        uses: actions/cache@v4
+        with:
+          path: .cache/pylibjpeg-data
+          key: pylibjpeg-data-v1
+          restore-keys: pylibjpeg-data-
+      - name: Fetch pylibjpeg-data
+        run: sh scripts/fetch-pylibjpeg-data.sh
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -25,8 +35,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
+      # The corpus conformance run is part of the coverage run, so the codec paths it exercises
+      # are measured instead of only the unit tests.
       - name: Coverage
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:

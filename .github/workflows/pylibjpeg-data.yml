@@ -1,9 +1,14 @@
 name: pylibjpeg-data
 
+# A nightly run against a fresh clone of the corpus, so datasets added upstream are decoded
+# without waiting for a pull request. Pull request and main runs cover it inside CI already.
 on:
-  push:
-  pull_request:
+  schedule:
+    - cron: "23 4 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   decode:
