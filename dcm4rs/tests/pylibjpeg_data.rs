@@ -85,13 +85,6 @@ fn pylibjpeg_data_decodes() {
             }
         };
 
-        // `zune-jpeg` decodes 8-bit samples only; 12-bit JPEG needs a libjpeg-turbo build
-        // with 12-bit support, which has no Rust binding here.
-        if is_jpeg_uid(syntax.uid()) && descriptor.bits_allocated > 8 {
-            skipped += 1;
-            continue;
-        }
-
         if let Some(rows) = entry.rows {
             if descriptor.rows != rows {
                 failures.push(format!(
@@ -374,17 +367,6 @@ fn is_lossless_category(rel: &Path) -> bool {
             | Some("JPEGLSLossless")
             | Some("JPEGLossless")
             | Some("JPEGLosslessSV1")
-    )
-}
-
-fn is_jpeg_uid(uid: &str) -> bool {
-    matches!(
-        uid,
-        "1.2.840.10008.1.2.4.50"
-            | "1.2.840.10008.1.2.4.51"
-            | "1.2.840.10008.1.2.4.52"
-            | "1.2.840.10008.1.2.4.53"
-            | "1.2.840.10008.1.2.4.54"
     )
 }
 

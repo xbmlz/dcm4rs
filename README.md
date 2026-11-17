@@ -23,12 +23,12 @@ and keeps third-party codecs behind explicit features.
 dcm4rs = "0.1"
 ```
 
-Rust 1.75 or newer is required. The default `pixel-jpeg` feature decodes 8-bit JPEG; the remaining
-codecs are opt-in:
+Rust 1.75 or newer is required. The default `pixel-jpeg` feature decodes eight-bit and 12-bit
+JPEG; the remaining codecs are opt-in:
 
 | Feature | Default | Decoder |
 |---|---|---|
-| `pixel-jpeg` | yes | 8-bit JPEG baseline, extended and progressive via `zune-jpeg` |
+| `pixel-jpeg` | yes | 8-bit and 12-bit JPEG baseline, extended and progressive via `zune-jpeg` and `oxiarc-jpeg` |
 | `pixel-jpegls` | no | JPEG-LS lossless and near-lossless via `charls` (needs CMake and a C++ toolchain) |
 | `pixel-j2k` | no | JPEG 2000 / HTJ2K via `jpeg2k` with the pure-Rust `openjp2` port |
 | `pixel-jxl` | no | JPEG XL via `jxl-oxide` |
@@ -88,7 +88,8 @@ let pixels = file.decode_frame(0).unwrap();
 println!("{}x{}, {} bytes", descriptor.columns, descriptor.rows, pixels.len());
 ```
 
-RLE Lossless, JPEG Lossless, 8-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are decoded with
+RLE Lossless, JPEG Lossless, 8-bit and 12-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are
+decoded with
 8, 12, 14, 15 or 16-bit samples. Frames follow the
 Basic Offset Table and may span several fragments; an empty table falls back to
 `Number of Frames` and JPEG end-of-image markers, as pydicom does. Codestream precision that
@@ -139,12 +140,12 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 ## Status
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
-private dictionary registration, RLE / JPEG Lossless / 8-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL
-decoding.
+private dictionary registration, RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000
+/ JPEG XL decoding.
 
 Not implemented yet:
 
-- 12-bit JPEG and MPEG pixel data; those frames are carried through compressed and report
+- MPEG pixel data; those frames are carried through compressed and report
   `Error::UnsupportedPixelData` on decode.
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
 - Python-side conveniences such as JSON, deferred reads, `private_block` and typed value classes.

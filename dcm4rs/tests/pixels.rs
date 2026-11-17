@@ -487,6 +487,55 @@ fn jpeg_rgb_decodes() {
 
 #[cfg(feature = "pixel-jpeg")]
 #[test]
+fn jpeg_extended_12bit_decodes() {
+    // JPEG Extended (Process 2/4), the process DICOM uses for 12-bit samples in `.51`.
+    let width = 16u16;
+    let height = 16u16;
+    let samples: Vec<u16> = (0..u32::from(width) * u32::from(height))
+        .map(|index| ((index * 293) % 4096) as u16)
+        .collect();
+    let options = oxiarc_jpeg::EncodeOptions {
+        precision: 12,
+        ..Default::default()
+    };
+    let frame = oxiarc_jpeg::encode_u16_to_vec_with_options(
+        &samples,
+        width,
+        height,
+        oxiarc_jpeg::InputColor::Luma,
+        &options,
+    )
+    .expect("encode a 12-bit JPEG");
+    let mut set = pixel_set(height, width, 1, 16, 1, "MONOCHROME2");
+    let _ = set.set(tags::BITS_STORED, Vr::Us, Value::from_u16s(&[12]));
+    let _ = set.set(tags::HIGH_BIT, Vr::Us, Value::from_u16s(&[11]));
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), frame]),
+    );
+    let file = file(set, "1.2.840.10008.1.2.4.51");
+    let decoded = file.decode_frame(0).expect("decode a 12-bit JPEG");
+    assert_eq!(decoded.len(), usize::from(width) * usize::from(height) * 2);
+    let values: Vec<u16> = decoded
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    assert!(
+        values.iter().all(|value| *value <= 4095),
+        "12-bit samples exceed the stored precision"
+    );
+    let mean = values.iter().map(|value| i32::from(*value)).sum::<i32>() / values.len() as i32;
+    let expected =
+        samples.iter().map(|value| i32::from(*value)).sum::<i32>() / samples.len() as i32;
+    assert!(
+        (mean - expected).abs() <= 16,
+        "decoded mean {mean} differs from {expected}"
+    );
+}
+
+#[cfg(feature = "pixel-jpeg")]
+#[test]
 fn jpeg_rejects_malformed_stream() {
     let mut set = pixel_set(1, 1, 1, 8, 1, "MONOCHROME2");
     let _ = set.set(

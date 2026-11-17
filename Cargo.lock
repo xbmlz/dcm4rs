@@ -96,6 +96,7 @@ dependencies = [
  "jpeg-encoder",
  "jpeg2k",
  "jxl-oxide",
+ "oxiarc-jpeg",
  "zune-jpeg",
 ]
 
@@ -144,7 +145,7 @@ dependencies = [
  "anyhow",
  "log",
  "openjp2",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -359,6 +360,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxiarc-core"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7105e98c1e12eb2d8a4e003419455b13747f5b31d02740f451f5413491d1cf84"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxiarc-jpeg"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ced146f375e36f693f120ad867f554b29ad826cf72b42a509c7d653de830a219"
+dependencies = [
+ "oxiarc-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -436,12 +456,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn"
+version = "3.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+dependencies = [
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -452,7 +492,18 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]
