@@ -30,6 +30,7 @@ mod jpeg_lossless;
 mod jpegls;
 #[cfg(feature = "pixel-jxl")]
 mod jxl;
+mod lut;
 mod rle;
 
 /// How a pixel sample is interpreted: unsigned or two's-complement signed

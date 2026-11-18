@@ -170,8 +170,8 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
 private dictionary registration, private creator blocks, the DICOM JSON model (PS3.18 F.2),
-typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), RLE / JPEG Lossless /
-8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
+modality and VOI LUTs, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`),
+RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
 
 MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
 of `encapsulated_frames` as the compressed bitstreams they are, `mpeg2_sequence_header` reads the
