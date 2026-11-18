@@ -20,7 +20,7 @@ and keeps third-party codecs behind explicit features.
 
 ```toml
 [dependencies]
-dcm4rs = "0.1"
+dcm4rs = "0.2"
 ```
 
 Rust 1.75 or newer is required. The default `pixel-jpeg` feature decodes eight-bit and 12-bit
