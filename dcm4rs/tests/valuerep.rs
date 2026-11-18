@@ -427,3 +427,52 @@ fn dataset_reads_temporal_values() {
     assert_eq!(date_time.offset_minutes(), Some(-300));
     assert_eq!(date_time.second(), 55);
 }
+
+#[test]
+fn temporal_values_build_from_parts() {
+    let date = Date::from_ymd(2011, 3, 5).expect("date");
+    assert_eq!(date.text(), "20110305");
+    assert!(Date::from_ymd(2011, 2, 30).is_err());
+
+    let time = Time::from_hms(13, 44, 55).expect("time");
+    assert_eq!(time.text(), "134455");
+    let time = Time::from_fields(13, 44, 55, 123_000).expect("time");
+    assert_eq!(time.text(), "134455.123000");
+    // A leap second is allowed, an hour of 24 is not.
+    assert!(Time::from_hms(23, 59, 60).is_ok());
+    assert!(Time::from_hms(24, 0, 0).is_err());
+
+    let date_time = DateTime::from_ymd_hms(2011, 3, 5, 13, 44, 55).expect("date-time");
+    assert_eq!(date_time.text(), "20110305134455");
+    assert!(DateTime::from_ymd_hms(2011, 2, 30, 0, 0, 0).is_err());
+}
+
+#[test]
+fn temporal_values_parse_through_from_str() {
+    let date: Date = "20110305".parse().expect("date");
+    assert_eq!(date.year(), 2011);
+
+    let time: Time = "134455".parse().expect("time");
+    assert_eq!(time.hour(), 13);
+
+    let date_time: DateTime = "20110305134455".parse().expect("date-time");
+    assert_eq!(date_time.year(), 2011);
+}
+
+#[test]
+fn temporal_values_display_their_text() {
+    let date = Date::parse("1911.12.13").expect("date");
+    assert_eq!(date.to_string(), "1911.12.13");
+
+    let time = Time::parse(" 212223 ").expect("time");
+    assert_eq!(time.to_string(), "212223");
+
+    let date_time = DateTime::parse("19111213212123").expect("date-time");
+    assert_eq!(date_time.to_string(), "19111213212123");
+}
+
+#[test]
+fn temporal_values_reject_an_empty_fraction() {
+    assert!(Time::parse("212223.").is_err());
+    assert!(DateTime::parse("20220101000000.").is_err());
+}
