@@ -23,6 +23,8 @@ pub struct DataSet {
     /// Character set of this data set; a sequence item inherits the parent's value when it
     /// carries no `(0008,0005)` of its own.
     charset: Charset,
+    /// Tags the encoded stream carried more than once, in the order they were seen.
+    duplicates: Vec<Tag>,
 }
 
 impl DataSet {
@@ -38,7 +40,21 @@ impl DataSet {
             elements: BTreeMap::new(),
             endian,
             charset: Charset::default(),
+            duplicates: Vec::new(),
         }
+    }
+
+    /// Tags the encoded stream carried more than once, in the order they were seen.
+    ///
+    /// The first occurrence is kept, as pydicom does — it warns about the later ones instead of
+    /// reporting them. A parent data set lists the duplicates found inside its sequence items
+    /// too, because the parser walks them with the same reader.
+    pub fn duplicates(&self) -> &[Tag] {
+        &self.duplicates
+    }
+
+    pub(crate) fn set_duplicates(&mut self, duplicates: Vec<Tag>) {
+        self.duplicates = duplicates;
     }
 
     /// The byte order used for numbers in this data set.

@@ -94,8 +94,10 @@ Supported input: explicit VR little endian, explicit VR big endian (retired), im
 deflated, sequences with defined or undefined lengths and encapsulated pixel data. A malformed
 encoding is an error by default; `ReadOptions::lenient_undefined_length` relaxes the one common
 case, an undefined length on a VR that does not allow it, by scanning to the item delimiter the
-way pydicom does. Writing is canonical: sequences get defined lengths, group length elements are
-dropped and values are padded to even length, so most sources round-trip semantically rather than
+way pydicom does. Repeated elements keep the first occurrence, where pydicom warns; the tags that
+appeared more than once are listed by `DataSet::duplicates`. Writing is canonical: sequences get
+defined lengths, group length elements are dropped and values are padded to even length, so most
+sources round-trip semantically rather than
 byte for byte; the 128-byte preamble is kept as read, and a file built with `DicomFile::new`
 starts with zeros. `DataSet::read` decodes a bare data set without a file meta;
 `DataSet::to_endian` converts numeric values, including nested sequence items, to another byte

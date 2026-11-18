@@ -135,6 +135,29 @@ fn lenient_reading_keeps_the_bytes_before_the_delimiter() {
     ));
 }
 
+#[test]
+fn duplicate_elements_keep_the_first_and_are_reported() {
+    let mut bytes = element_le("PN", tag(0x0010, 0x0010), b"Doe^John");
+    bytes.extend_from_slice(&element_le("PN", tag(0x0010, 0x0010), b"Roe^Jane"));
+    let set = read(&bytes, EXPLICIT_LE);
+    assert_eq!(set.string(tag(0x0010, 0x0010)).unwrap(), "Doe^John");
+    assert_eq!(set.duplicates(), &[tag(0x0010, 0x0010)]);
+}
+
+/// The parser walks items with the same reader, so a duplicate inside an item also shows up on
+/// the data set that contains it.
+#[test]
+fn duplicates_inside_an_item_are_visible_on_the_parent() {
+    let mut stream = item_undefined_le();
+    stream.extend_from_slice(&element_le("PN", tag(0x0010, 0x0010), b"Doe^John"));
+    stream.extend_from_slice(&element_le("PN", tag(0x0010, 0x0010), b"Roe^Jane"));
+    stream.extend_from_slice(&delimiter_le(ITEM_DELIMITER));
+    stream.extend_from_slice(&delimiter_le(SEQUENCE_DELIMITER));
+    let bytes = element_le_undefined("SQ", tag(0x0040, 0x0275), &stream);
+    let set = read(&bytes, EXPLICIT_LE);
+    assert_eq!(set.duplicates(), &[tag(0x0010, 0x0010)]);
+}
+
 /// A defined-length item bounds its elements, so a value running past it is malformed. Without
 /// the check the value silently consumes the bytes that follow the item.
 #[test]
