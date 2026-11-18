@@ -42,6 +42,7 @@ mod element;
 mod endian;
 mod error;
 mod file;
+mod private_block;
 mod private_dict;
 mod read_options;
 mod reader;
@@ -67,6 +68,7 @@ pub use file::DicomFile;
 pub use pixels::{
     PhotometricInterpretation, PixelDescriptor, PixelRepresentation, PlanarConfiguration,
 };
+pub use private_block::PrivateBlock;
 pub use private_dict::PrivateDictionary;
 pub use read_options::ReadOptions;
 pub use tag::Tag;
