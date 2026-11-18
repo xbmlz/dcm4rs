@@ -52,6 +52,29 @@ assert_eq!(ds.u16(tags::COLUMNS).unwrap(), 512);
 assert_eq!(ds.get(tags::PATIENT_NAME).unwrap().tag, Tag::new(0x0010, 0x0010));
 ```
 
+## Typed values
+
+Values are stored as the bytes the standard defines, so a file round-trips exactly, but the VRs
+with internal structure are tedious to use as bytes. The `valuerep` module parses them on demand
+and keeps the text each value was written as, so a value read and written back unmodified loses
+nothing:
+
+```rust
+use dcm4rs::dictionary::tags;
+
+let dataset = DicomFile::read_file("image.dcm")?.dataset;
+let name = dataset.person_name(tags::PATIENT_NAME)?;      // PN: three groups of five components
+let thickness = dataset.decimal_strings(tags::SLICE_THICKNESS)?; // DS: text + f64
+let echo = dataset.integer_strings(tags::ECHO_NUMBERS)?;  // IS: text + i32
+let date = dataset.date(tags::STUDY_DATE)?;               // DA: year / month / day
+let time = dataset.time(tags::STUDY_TIME)?;               // TM: hour / minute / second / fraction
+let stamp = dataset.date_time(tags::ACQUISITION_DATE_TIME)?; // DT: partial values are allowed
+```
+
+Each accessor checks the VR and reports `Error::WrongVr` on a mismatch. `DateTime` keeps the UTC
+offset (`offset_minutes`) out of `Ord` on purpose: a value with an offset names a different
+instant from the same fields without one, so comparing them silently would hide that.
+
 ## Reading and writing files
 
 ```rust
@@ -68,11 +91,15 @@ let bytes = file.write().unwrap();
 ```
 
 Supported input: explicit VR little endian, explicit VR big endian (retired), implicit VR,
-deflated, sequences with defined or undefined lengths and encapsulated pixel data. Writing is
-canonical: sequences get defined lengths, group length elements are dropped and values are padded
-to even length, so most sources round-trip semantically rather than byte for byte. `DataSet::read`
-decodes a bare data set without a file meta; `DataSet::to_endian` converts numeric values,
-including nested sequence items, to another byte order.
+deflated, sequences with defined or undefined lengths and encapsulated pixel data. A malformed
+encoding is an error by default; `ReadOptions::lenient_undefined_length` relaxes the one common
+case, an undefined length on a VR that does not allow it, by scanning to the item delimiter the
+way pydicom does. Writing is canonical: sequences get defined lengths, group length elements are
+dropped and values are padded to even length, so most sources round-trip semantically rather than
+byte for byte; the 128-byte preamble is kept as read, and a file built with `DicomFile::new`
+starts with zeros. `DataSet::read` decodes a bare data set without a file meta;
+`DataSet::to_endian` converts numeric values, including nested sequence items, to another byte
+order.
 
 ## Pixel data
 
@@ -140,26 +167,26 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 ## Status
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
-private dictionary registration, RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000
-/ JPEG XL decoding.
+private dictionary registration, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM`
+and `DT`), RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
 
 Not implemented yet:
 
 - MPEG pixel data; those frames are carried through compressed and report
   `Error::UnsupportedPixelData` on decode.
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
-- Python-side conveniences such as JSON, deferred reads, `private_block` and typed value classes.
+- Python-side conveniences such as JSON, deferred reads and `private_block`.
 
 Where dcm4rs deliberately differs from pydicom, the difference is pinned by a test:
 
 | Area | dcm4rs |
 |---|---|
-| Part 10 preamble | dropped on read, written as 128 zero bytes |
+| Part 10 preamble | kept as read and written back; a file built with `DicomFile::new` starts with 128 zero bytes |
 | Group length elements | never written; `(0002,0000)` and `(xxxx,0000)` are dropped |
 | Ambiguous VR | corrected on write from Pixel Representation, Bits Allocated and LUT context |
 | Unknown escape sequence | `Error::InvalidText` instead of pydicom's warning and default encoding |
-| `DataSet` equality | compares elements and byte order |
-| Unknown/undefined-length non-SQ element | `Error::InvalidData`, except `UN` (read as `SQ`) and `OB`/`OW` (read as fragments) |
+| `DataSet` equality | compares elements; byte order and inherited character set do not take part |
+| Unknown/undefined-length non-SQ element | `Error::InvalidData`, except `UN` (read as `SQ`) and `OB`/`OW` (read as fragments); `ReadOptions::lenient_undefined_length` scans to the item delimiter instead |
 
 ## License
 

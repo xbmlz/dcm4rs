@@ -4,12 +4,12 @@
 //! computation, encapsulated pixel data, canonicalization and the errors the writer raises.
 //!
 //! Divergences from pydicom asserted below and listed in the README: group length elements are
-//! dropped, the file meta carries no `(0002,0000)`, values are written exactly as stored (no
-//! byte-order conversion, no ambiguous-VR correction) and the preamble is always zeroed.
+//! dropped, the file meta carries no `(0002,0000)`, and values are written exactly as stored (no
+//! byte-order conversion, no ambiguous-VR correction).
 
 mod common;
 
-use dcm4rs::{DataSet, DicomFile, Endian, Error, Tag, TransferSyntax, Value, Vr};
+use dcm4rs::{dictionary::tags, DataSet, DicomFile, Endian, Error, Tag, TransferSyntax, Value, Vr};
 
 use common::{
     delimiter_le, element_be, element_implicit, element_le, element_le_undefined, item_le,
@@ -410,15 +410,33 @@ fn written_body_uses_the_declared_syntax() {
 }
 
 #[test]
-fn preamble_is_zeroed_on_write() {
+fn preamble_is_kept_on_write() {
     let body = element_le("PN", tag(0x0010, 0x0010), b"Doe^John");
     let mut input = part10(&meta_transfer_syntax(EXPLICIT_LE), &body);
     input[0..128].fill(0xAB);
 
     let file = DicomFile::read(&input).unwrap();
+    assert_eq!(file.preamble, [0xAB; 128]);
     let written = file.write().unwrap();
-    assert_eq!(&written[0..128], &[0u8; 128]);
+    assert_eq!(&written[0..128], &[0xAB; 128]);
     assert_eq!(&written[128..132], b"DICM");
+    // The preamble is a transport detail, so it does not take part in equality.
+    assert_eq!(DicomFile::read(&written).unwrap(), file);
+}
+
+/// A file built from a data set has no preamble to keep, so it starts with zeros.
+#[test]
+fn a_new_file_starts_with_a_zero_preamble() {
+    let mut dataset = DataSet::new();
+    dataset.set_string(tags::SOP_CLASS_UID, Vr::Ui, "1.2.840.10008.5.1.4.1.1.2");
+    dataset.set_string(
+        tags::SOP_INSTANCE_UID,
+        Vr::Ui,
+        "1.2.840.10008.5.1.4.1.1.2.1",
+    );
+    let file = DicomFile::new(dataset, EXPLICIT_LE).unwrap();
+    assert_eq!(file.preamble, [0u8; 128]);
+    assert_eq!(&file.write().unwrap()[0..128], &[0u8; 128]);
 }
 
 #[test]

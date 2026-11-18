@@ -43,6 +43,7 @@ mod endian;
 mod error;
 mod file;
 mod private_dict;
+mod read_options;
 mod reader;
 mod tag;
 mod transfer_syntax;
@@ -66,6 +67,7 @@ pub use pixels::{
     PhotometricInterpretation, PixelDescriptor, PixelRepresentation, PlanarConfiguration,
 };
 pub use private_dict::PrivateDictionary;
+pub use read_options::ReadOptions;
 pub use tag::Tag;
 pub use transfer_syntax::TransferSyntax;
 pub use uid::Uid;

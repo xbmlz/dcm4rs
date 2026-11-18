@@ -11,7 +11,7 @@
 
 mod common;
 
-use dcm4rs::{DataSet, Element, Endian, Error, Tag, TransferSyntax, Value, Vr};
+use dcm4rs::{DataSet, Element, Endian, Error, ReadOptions, Tag, TransferSyntax, Value, Vr};
 
 use common::{
     delimiter_le, element_be, element_implicit, element_le, element_le_undefined, item_be, item_le,
@@ -108,6 +108,30 @@ fn explicit_undefined_length_on_a_non_sequence_is_rejected() {
             offset: 12,
             reason: "undefined length on a non-sequence element"
         })
+    ));
+}
+
+/// PS3.5 does not allow an undefined length on `UT`, but some writers use it and end the value
+/// with an item delimiter. pydicom reads to that delimiter and keeps what it finds;
+/// `ReadOptions::lenient_undefined_length` asks for the same, while the default still refuses.
+#[test]
+fn lenient_reading_keeps_the_bytes_before_the_delimiter() {
+    let mut bytes = tag_le(tag(0x0010, 0x0010)).to_vec();
+    bytes.extend_from_slice(b"UT");
+    bytes.extend_from_slice(&[0x00, 0x00]);
+    bytes.extend_from_slice(&UNDEFINED.to_le_bytes());
+    bytes.extend_from_slice(b"Doe^John");
+    bytes.extend_from_slice(&delimiter_le(ITEM_DELIMITER));
+
+    let lenient = ReadOptions {
+        lenient_undefined_length: true,
+    };
+    let set = DataSet::read_with_options(&bytes, EXPLICIT_LE, lenient).expect("lenient read");
+    assert_eq!(set.string(tag(0x0010, 0x0010)).unwrap(), "Doe^John");
+
+    assert!(matches!(
+        DataSet::read(&bytes, EXPLICIT_LE),
+        Err(Error::InvalidData { .. })
     ));
 }
 
