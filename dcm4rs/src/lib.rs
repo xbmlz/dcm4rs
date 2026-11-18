@@ -72,6 +72,7 @@ pub use pixels::{
 pub use private_block::PrivateBlock;
 pub use private_dict::PrivateDictionary;
 pub use read_options::ReadOptions;
+pub use reader::DeferredElement;
 pub use tag::Tag;
 pub use transfer_syntax::TransferSyntax;
 pub use uid::Uid;

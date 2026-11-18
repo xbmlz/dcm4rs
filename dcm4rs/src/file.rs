@@ -1,11 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::dataset::DataSet;
 use crate::dictionary::tags;
+use crate::element::Element;
 use crate::error::{Error, Result};
 use crate::private_dict::PrivateDictionary;
 use crate::read_options::ReadOptions;
-use crate::reader::Reader;
+use crate::reader::{DeferredElement, Reader};
+use crate::tag::Tag;
 use crate::transfer_syntax::TransferSyntax;
 use crate::value::Value;
 use crate::vr::Vr;
@@ -21,6 +23,13 @@ const DICM_OFFSET: usize = PREAMBLE_LENGTH;
 /// needed.
 const IMPLEMENTATION_CLASS_UID: &str = "2.25.247279088714401268306282486322359480112";
 
+/// Where a file's bytes came from, so a deferred element can be read again.
+#[derive(Clone, Debug)]
+enum Source {
+    Bytes(Vec<u8>),
+    Path(PathBuf),
+}
+
 /// A DICOM Part 10 file: the file meta information plus the main data set.
 #[derive(Clone, Debug)]
 pub struct DicomFile {
@@ -34,6 +43,10 @@ pub struct DicomFile {
     /// so keeping it lets a file be read and written back byte for byte. A file built with
     /// [`DicomFile::new`] starts with zeros.
     pub preamble: [u8; PREAMBLE_LENGTH],
+    /// Where the file's bytes came from, so a deferred value can be read again.
+    source: Option<Source>,
+    /// Elements whose values a read left out, in stream order.
+    deferred: Vec<DeferredElement>,
 }
 
 impl DicomFile {
@@ -75,16 +88,29 @@ impl DicomFile {
         let mut reader = Reader::new(&bytes[meta_start..], TransferSyntax::ExplicitVrLittleEndian);
         let mut meta = DataSet::new();
         while reader.remaining() >= 4 && reader.peek_tag()?.group() == 0x0002 {
-            meta.insert(reader.read_element()?);
+            if let Some(element) = reader.read_element()? {
+                meta.insert(element);
+            }
         }
         let dataset_start = meta_start + reader.position();
         let syntax = transfer_syntax_from_meta(&meta)?;
-        let dataset =
-            DataSet::read_inner(&bytes[dataset_start..], syntax, private_dictionary, options)?;
+        let (dataset, deferred) = DataSet::read_inner_with_deferred(
+            &bytes[dataset_start..],
+            syntax,
+            private_dictionary,
+            options,
+        )?;
+        let source = if deferred.is_empty() {
+            None
+        } else {
+            Some(Source::Bytes(bytes.to_vec()))
+        };
         Ok(Self {
             meta,
             dataset,
             preamble,
+            source,
+            deferred,
         })
     }
 
@@ -96,8 +122,14 @@ impl DicomFile {
 
     /// Read a Part 10 file from disk, applying [`ReadOptions`].
     pub fn read_file_with_options(path: impl AsRef<Path>, options: ReadOptions) -> Result<Self> {
-        let bytes = std::fs::read(path).map_err(|err| Error::Io(err.to_string()))?;
-        Self::read_with_options(&bytes, options)
+        let path = path.as_ref().to_path_buf();
+        let bytes = std::fs::read(&path).map_err(|err| Error::Io(err.to_string()))?;
+        let mut file = Self::read_with_options(&bytes, options)?;
+        if !file.deferred.is_empty() {
+            // Re-open the file on demand rather than hold a copy of it in memory.
+            file.source = Some(Source::Path(path));
+        }
+        Ok(file)
     }
 
     /// Read a Part 10 file from disk while resolving private element VRs.
@@ -157,7 +189,83 @@ impl DicomFile {
             meta,
             dataset,
             preamble: [0u8; PREAMBLE_LENGTH],
+            source: None,
+            deferred: Vec::new(),
         })
+    }
+
+    /// Assemble a file from parts that are already built.
+    ///
+    /// [`DicomFile::new`] derives the meta information from the data set; this takes it as it
+    /// stands, which is what a caller that built the meta information elsewhere has.
+    pub fn from_parts(meta: DataSet, dataset: DataSet, preamble: [u8; PREAMBLE_LENGTH]) -> Self {
+        Self {
+            meta,
+            dataset,
+            preamble,
+            source: None,
+            deferred: Vec::new(),
+        }
+    }
+
+    /// The elements whose values were left out of the data set because they reached
+    /// [`ReadOptions::defer_size`].
+    pub fn deferred_elements(&self) -> &[DeferredElement] {
+        &self.deferred
+    }
+
+    /// Whether `tag` was deferred.
+    pub fn is_deferred(&self, tag: Tag) -> bool {
+        self.deferred.iter().any(|element| element.tag == tag)
+    }
+
+    /// Read one deferred element back into the data set.
+    ///
+    /// A tag that was not deferred is returned as it stands, so this is safe to call for any
+    /// tag. Reading again re-parses the file the element came from.
+    pub fn load_element(&mut self, tag: Tag) -> Result<&Element> {
+        if !self.is_deferred(tag) {
+            return self.dataset.element(tag);
+        }
+        let bytes = self.source_bytes()?;
+        let fresh = Self::read_inner(&bytes, None, ReadOptions::default())?;
+        let element = fresh.dataset.element(tag)?.clone();
+        self.dataset.insert(element);
+        self.deferred.retain(|deferred| deferred.tag != tag);
+        self.dataset.element(tag)
+    }
+
+    /// Read every deferred element back, reporting how many came back.
+    pub fn load_deferred(&mut self) -> Result<usize> {
+        if self.deferred.is_empty() {
+            return Ok(0);
+        }
+        let bytes = self.source_bytes()?;
+        let fresh = Self::read_inner(&bytes, None, ReadOptions::default())?;
+        let tags: Vec<Tag> = self.deferred.iter().map(|deferred| deferred.tag).collect();
+        let mut loaded = 0;
+        for tag in &tags {
+            if let Some(element) = fresh.dataset.get(*tag) {
+                self.dataset.insert(element.clone());
+                loaded += 1;
+            }
+        }
+        self.deferred
+            .retain(|deferred| !tags.contains(&deferred.tag));
+        Ok(loaded)
+    }
+
+    fn source_bytes(&self) -> Result<Vec<u8>> {
+        match &self.source {
+            Some(Source::Bytes(bytes)) => Ok(bytes.clone()),
+            Some(Source::Path(path)) => {
+                std::fs::read(path).map_err(|err| Error::Io(err.to_string()))
+            }
+            None => Err(Error::InvalidData {
+                offset: 0,
+                reason: "the file of a deferred element is gone",
+            }),
+        }
     }
 
     /// Encode this file, preamble and prefix included.
@@ -204,4 +312,90 @@ fn transfer_syntax_from_meta(meta: &DataSet) -> Result<TransferSyntax> {
 
 fn implementation_version_name() -> String {
     format!("DCM4RS_{}", env!("CARGO_PKG_VERSION").replace('.', "_"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file whose Pixel Data holds 400 bytes, so a defer size can single it out.
+    fn image() -> DicomFile {
+        let mut set = DataSet::new();
+        set.set_string(tags::SOP_CLASS_UID, Vr::Ui, "1.2.840.10008.5.1.4.1.1.2");
+        set.set_string(tags::SOP_INSTANCE_UID, Vr::Ui, "1.2.3");
+        set.set(Tag::new(0x0028, 0x0002), Vr::Us, Value::from_u16s(&[1]));
+        set.set(
+            Tag::new(0x0028, 0x0004),
+            Vr::Cs,
+            Value::from_str("MONOCHROME2"),
+        );
+        set.set(Tag::new(0x0028, 0x0010), Vr::Us, Value::from_u16s(&[2]));
+        set.set(Tag::new(0x0028, 0x0011), Vr::Us, Value::from_u16s(&[2]));
+        set.set(Tag::new(0x0028, 0x0100), Vr::Us, Value::from_u16s(&[8]));
+        set.set(Tag::new(0x0028, 0x0101), Vr::Us, Value::from_u16s(&[8]));
+        set.set(Tag::new(0x0028, 0x0102), Vr::Us, Value::from_u16s(&[7]));
+        set.set(Tag::new(0x0028, 0x0103), Vr::Us, Value::from_u16s(&[0]));
+        set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(vec![0u8; 400]));
+        DicomFile::new(set, TransferSyntax::ExplicitVrLittleEndian).expect("file")
+    }
+
+    fn deferred_options() -> ReadOptions {
+        ReadOptions {
+            defer_size: 200,
+            ..ReadOptions::default()
+        }
+    }
+
+    #[test]
+    fn a_large_value_is_left_out_until_it_is_loaded() {
+        let bytes = image().write().expect("bytes");
+        let mut file = DicomFile::read_with_options(&bytes, deferred_options()).expect("read");
+
+        assert!(file.is_deferred(tags::PIXEL_DATA));
+        assert!(!file.dataset.contains(tags::PIXEL_DATA));
+        assert_eq!(file.deferred_elements().len(), 1);
+        assert_eq!(file.deferred_elements()[0].length, 400);
+        // The small elements are all there.
+        assert!(file.dataset.contains(Tag::new(0x0028, 0x0010)));
+
+        let element = file.load_element(tags::PIXEL_DATA).expect("loaded");
+        assert_eq!(element.raw_value().len(), 400);
+        assert!(file.dataset.contains(tags::PIXEL_DATA));
+        assert!(file.deferred_elements().is_empty());
+    }
+
+    #[test]
+    fn load_deferred_brings_back_every_element() {
+        let bytes = image().write().expect("bytes");
+        let mut file = DicomFile::read_with_options(&bytes, deferred_options()).expect("read");
+
+        assert_eq!(file.load_deferred().expect("loaded"), 1);
+        assert!(file.deferred_elements().is_empty());
+        assert!(file.dataset.contains(tags::PIXEL_DATA));
+        // The deferred value is the one the file carried, not a placeholder.
+        assert_eq!(
+            file.dataset
+                .element(tags::PIXEL_DATA)
+                .expect("pixel data")
+                .raw_value()
+                .len(),
+            400
+        );
+    }
+
+    #[test]
+    fn the_default_reads_every_value() {
+        let bytes = image().write().expect("bytes");
+        let file = DicomFile::read(&bytes).expect("read");
+        assert!(file.dataset.contains(tags::PIXEL_DATA));
+        assert!(file.deferred_elements().is_empty());
+    }
+
+    #[test]
+    fn a_tag_that_was_never_deferred_loads_as_it_stands() {
+        let bytes = image().write().expect("bytes");
+        let mut file = DicomFile::read_with_options(&bytes, deferred_options()).expect("read");
+        let rows = Tag::new(0x0028, 0x0010);
+        assert_eq!(file.load_element(rows).expect("rows").byte_len(), 2);
+    }
 }

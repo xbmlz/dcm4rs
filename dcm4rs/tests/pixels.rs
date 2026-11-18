@@ -54,11 +54,7 @@ fn file(mut dataset: DataSet, uid: &str) -> DicomFile {
     let mut meta = DataSet::new();
     let _ = meta.set(tags::TRANSFER_SYNTAX_UID, Vr::Ui, Value::from_str(uid));
     dataset.set_endian(dcm4rs::Endian::Little);
-    DicomFile {
-        meta,
-        dataset,
-        preamble: [0u8; 128],
-    }
+    DicomFile::from_parts(meta, dataset, [0u8; 128])
 }
 
 /// Encode a literal PackBits run of at most 128 bytes.
