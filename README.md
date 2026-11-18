@@ -169,8 +169,9 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 ## Status
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
-private dictionary registration, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM`
-and `DT`), RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
+private dictionary registration, private creator blocks, typed views for the structured VRs
+(`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS /
+JPEG 2000 / JPEG XL decoding.
 
 MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
 of `encapsulated_frames` as the compressed bitstreams they are, `mpeg2_sequence_header` reads the
@@ -180,7 +181,7 @@ asking for a pixel reports `Error::UnsupportedPixelData`.
 Not implemented yet:
 
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
-- Python-side conveniences such as JSON, deferred reads and `private_block`.
+- Python-side conveniences such as JSON and deferred reads.
 
 Where dcm4rs deliberately differs from pydicom, the difference is pinned by a test:
 
