@@ -17,9 +17,15 @@ use std::fmt;
 
 use crate::dataset::DataSet;
 use crate::dictionary::tags;
+use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::file::DicomFile;
 use crate::transfer_syntax::TransferSyntax;
+use crate::value::Value;
+use crate::vr::Vr;
+
+/// Transfer syntax UID of RLE Lossless, the one encoding this crate writes.
+const RLE_LOSSLESS: &str = "1.2.840.10008.1.2.5";
 
 #[cfg(feature = "pixel-j2k")]
 mod j2k;
@@ -444,6 +450,41 @@ impl DicomFile {
             .iter()
             .map(|frame| decode_frame_bytes(syntax, &descriptor, frame))
             .collect()
+    }
+
+    /// Replace native Pixel Data with RLE Lossless encapsulated data.
+    ///
+    /// Every frame is encoded and the transfer syntax in the file meta information becomes RLE
+    /// Lossless. An already encapsulated file is refused, because the frames would have to be
+    /// decoded and re-encoded and this crate does not re-encode every codec it can decode.
+    pub fn compress_rle(&mut self) -> Result<()> {
+        let descriptor = self.dataset.pixel_descriptor()?;
+        let syntax = self.transfer_syntax()?;
+        if syntax.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            encoded.push(rle::encode(frame, &descriptor)?);
+        }
+        let value = crate::encaps::encapsulate(&encoded, 1, true)?;
+        // Encapsulated Pixel Data is kept as its fragments, so the encapsulated value is split
+        // back into the items it is made of.
+        let fragments: Vec<Vec<u8>> = crate::encaps::generate_fragments(&value, Endian::Little)?
+            .into_iter()
+            .map(|fragment| fragment.to_vec())
+            .collect();
+        self.dataset
+            .set(tags::PIXEL_DATA, Vr::Ob, Value::Fragments(fragments));
+        self.meta.set(
+            tags::TRANSFER_SYNTAX_UID,
+            Vr::Ui,
+            Value::from_str(RLE_LOSSLESS),
+        );
+        Ok(())
     }
 }
 

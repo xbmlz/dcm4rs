@@ -38,6 +38,7 @@
 
 mod charset;
 mod dataset;
+mod dicomdir;
 mod element;
 mod endian;
 mod error;
@@ -59,9 +60,11 @@ pub mod mpeg;
 pub mod pixels;
 pub mod uid;
 pub mod valuerep;
+pub mod waveform;
 
 pub use charset::Charset;
 pub use dataset::DataSet;
+pub use dicomdir::{DicomDir, DirectoryRecord};
 pub use element::Element;
 pub use endian::Endian;
 pub use error::{Error, Result};

@@ -768,3 +768,53 @@ fn decode_pixel_data_decodes_every_frame() {
         vec![vec![0x7F], vec![0x7F]]
     );
 }
+
+#[test]
+fn rle_compression_round_trips_the_stored_pixels() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![1, 2, 3, 4]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_rle().expect("compress");
+    assert_eq!(file.transfer_syntax().expect("syntax").uid(), RLE_UID);
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn rle_compression_survives_a_write_and_read_back() {
+    let mut set = pixel_set(2, 2, 1, 16, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ow,
+        Value::from_u16s(&[10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+    file.compress_rle().expect("compress");
+
+    let bytes = file.write().expect("bytes");
+    let read = DicomFile::read(&bytes).expect("read");
+    assert_eq!(read.transfer_syntax().expect("syntax").uid(), RLE_UID);
+    assert_eq!(
+        read.decode_frame(0).expect("frame"),
+        Value::from_u16s(&[10, 20, 30, 40]).as_bytes().unwrap()
+    );
+}
+
+#[test]
+fn compressing_an_encapsulated_file_is_refused() {
+    let mut set = pixel_set(1, 1, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), rle_frame(&[literal(&[0x7F])])]),
+    );
+    let mut file = file(set, RLE_UID);
+    assert!(matches!(
+        file.compress_rle(),
+        Err(Error::InvalidPixelData(_))
+    ));
+}

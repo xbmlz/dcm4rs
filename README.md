@@ -170,9 +170,10 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
 private dictionary registration, private creator blocks, deferred reads, the DICOM JSON model
-(PS3.18 F.2), modality and VOI LUTs, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`,
-`TM` and `DT`), RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL
-decoding.
+(PS3.18 F.2), modality and VOI LUTs, media storage directory reading (the DICOMDIR), waveform
+decoding, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`),
+RLE Lossless encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 /
+JPEG XL decoding.
 
 MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
 of `encapsulated_frames` as the compressed bitstreams they are, `mpeg2_sequence_header` reads the
@@ -182,8 +183,9 @@ asking for a pixel reports `Error::UnsupportedPixelData`.
 Not implemented yet:
 
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
-- File-set and DICOMDIR maintenance (`pydicom.fileset`), waveform decoding, and compressed pixel
-  data writing (`Dataset.compress()`).
+- File-set maintenance: a DICOMDIR is read, but a new one is not built and written
+  (`pydicom.fileset`).
+- Compressing pixel data with anything other than RLE Lossless.
 
 Where dcm4rs deliberately differs from pydicom, the difference is pinned by a test:
 
