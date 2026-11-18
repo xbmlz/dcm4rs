@@ -170,9 +170,9 @@ cargo test --all-features --test pylibjpeg_data -- --nocapture
 
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
 private dictionary registration, private creator blocks, deferred reads, the DICOM JSON model
-(PS3.18 F.2), modality and VOI LUTs, media storage directory reading (the DICOMDIR), waveform
-decoding, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`),
-RLE Lossless encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 /
+(PS3.18 F.2), modality and VOI LUTs, media storage directories (the DICOMDIR), waveform decoding,
+typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), RLE Lossless, baseline
+JPEG and JPEG-LS encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 /
 JPEG XL decoding.
 
 MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
@@ -183,9 +183,8 @@ asking for a pixel reports `Error::UnsupportedPixelData`.
 Not implemented yet:
 
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
-- File-set maintenance: a DICOMDIR is read, but a new one is not built and written
-  (`pydicom.fileset`).
-- Compressing pixel data with anything other than RLE Lossless.
+- Compressing pixel data with JPEG 2000 or JPEG XL: this dependency set carries no encoder for
+  either, so only RLE Lossless, baseline JPEG and JPEG-LS are written.
 
 Where dcm4rs deliberately differs from pydicom, the difference is pinned by a test:
 
@@ -200,6 +199,7 @@ Where dcm4rs deliberately differs from pydicom, the difference is pinned by a te
 | JSON `BulkDataURI` | `Error::InvalidValue` on read, because fetching it needs whatever hosts the payload |
 | JSON encapsulated pixel data | `Error::UnsupportedPixelData` on write, because the fragments would come back as one opaque blob |
 | Deferred reads | the tag stays out of the data set until `load_element` re-reads it, rather than holding a placeholder whose value fetches on access |
+| DICOMDIR | the tree is rebuilt from the record flags, not from the byte offsets; writing recomputes the offsets from the record order |
 
 ## License
 

@@ -470,7 +470,12 @@ impl DicomFile {
         for frame in &frames {
             encoded.push(rle::encode(frame, &descriptor)?);
         }
-        let value = crate::encaps::encapsulate(&encoded, 1, true)?;
+        self.set_encapsulated(encoded, RLE_LOSSLESS)
+    }
+
+    /// Store `frames` as encapsulated Pixel Data and switch the transfer syntax to `uid`.
+    fn set_encapsulated(&mut self, frames: Vec<Vec<u8>>, uid: &str) -> Result<()> {
+        let value = crate::encaps::encapsulate(&frames, 1, true)?;
         // Encapsulated Pixel Data is kept as its fragments, so the encapsulated value is split
         // back into the items it is made of.
         let fragments: Vec<Vec<u8>> = crate::encaps::generate_fragments(&value, Endian::Little)?
@@ -479,12 +484,106 @@ impl DicomFile {
             .collect();
         self.dataset
             .set(tags::PIXEL_DATA, Vr::Ob, Value::Fragments(fragments));
-        self.meta.set(
-            tags::TRANSFER_SYNTAX_UID,
-            Vr::Ui,
-            Value::from_str(RLE_LOSSLESS),
-        );
+        self.meta
+            .set(tags::TRANSFER_SYNTAX_UID, Vr::Ui, Value::from_str(uid));
         Ok(())
+    }
+}
+
+#[cfg(feature = "pixel-jpeg")]
+impl DicomFile {
+    /// Replace native 8-bit Pixel Data with baseline JPEG.
+    ///
+    /// `quality` is the encoder's 1-100 scale. A colour frame is written as YCbCr, so its
+    /// photometric interpretation becomes `YBR_FULL_422`.
+    pub fn compress_jpeg(&mut self, quality: u8) -> Result<()> {
+        use jpeg_encoder::{ColorType, Encoder};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if descriptor.bits_allocated != 8 {
+            return Err(Error::InvalidPixelData(
+                "baseline JPEG writes 8-bit samples only".to_owned(),
+            ));
+        }
+        let colour = descriptor.samples_per_pixel == 3;
+        let color = match descriptor.samples_per_pixel {
+            1 => ColorType::Luma,
+            3 => ColorType::Rgb,
+            samples => {
+                return Err(Error::InvalidPixelData(format!(
+                    "baseline JPEG needs one or three samples, this image has {samples}"
+                )))
+            }
+        };
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let mut out = Vec::new();
+            Encoder::new(&mut out, quality)
+                .encode(frame, descriptor.columns, descriptor.rows, color)
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG encoder: {err}")))?;
+            encoded.push(out);
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.50")?;
+        if colour {
+            self.dataset
+                .set_string(tags::PHOTOMETRIC_INTERPRETATION, Vr::Cs, "YBR_FULL_422");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "pixel-jpegls")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG-LS Lossless.
+    pub fn compress_jpegls(&mut self) -> Result<()> {
+        use charls::{CharLS, FrameInfo, InterleaveMode};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.bits_allocated, 8 | 16) {
+            return Err(Error::InvalidPixelData(
+                "JPEG-LS writes 8- and 16-bit samples".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.samples_per_pixel, 1 | 3) {
+            return Err(Error::InvalidPixelData(
+                "JPEG-LS needs one or three samples".to_owned(),
+            ));
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let mut encoder = CharLS::default();
+            if descriptor.samples_per_pixel > 1 {
+                encoder
+                    .set_interleave_mode(InterleaveMode::Sample)
+                    .map_err(|err| Error::InvalidPixelData(format!("JPEG-LS encoder: {err}")))?;
+            }
+            let compressed = encoder
+                .encode(
+                    FrameInfo {
+                        width: u32::from(descriptor.columns),
+                        height: u32::from(descriptor.rows),
+                        bits_per_sample: i32::from(descriptor.bits_allocated),
+                        component_count: i32::from(descriptor.samples_per_pixel),
+                    },
+                    0,
+                    frame,
+                )
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG-LS encoder: {err}")))?;
+            encoded.push(compressed);
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.80")
     }
 }
 

@@ -13,7 +13,7 @@ documentation = "https://docs.rs/dcm4rs"
 
 [features]
 default = ["pixel-jpeg"]
-pixel-jpeg = ["dep:zune-jpeg", "dep:oxiarc-jpeg"]
+pixel-jpeg = ["dep:zune-jpeg", "dep:oxiarc-jpeg", "dep:jpeg-encoder"]
 pixel-jpegls = ["dep:charls"]
 pixel-j2k = ["dep:jpeg2k"]
 pixel-jxl = ["dep:jxl-oxide"]
@@ -24,6 +24,7 @@ serde_json = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 charls = { version = "0.4", optional = true }
 jpeg2k = { version = "0.9", optional = true, default-features = false, features = ["openjp2"] }
+jpeg-encoder = { version = "0.6", optional = true }
 jxl-oxide = { version = "0.10", optional = true, default-features = false }
 oxiarc-jpeg = { version = "0.4", optional = true }
 zune-jpeg = { version = "0.4", optional = true }

@@ -818,3 +818,46 @@ fn compressing_an_encapsulated_file_is_refused() {
         Err(Error::InvalidPixelData(_))
     ));
 }
+
+#[cfg(feature = "pixel-jpeg")]
+#[test]
+fn jpeg_compression_writes_baseline_and_decodes_back() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jpeg(100).expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.50"
+    );
+    let decoded = file.decode_frame(0).expect("frame");
+    assert_eq!(decoded.len(), 4);
+    // Lossy: close at quality 100, not exact.
+    for (decoded, original) in decoded.iter().zip([10u8, 20, 30, 40]) {
+        assert!(decoded.abs_diff(original) <= 4, "{decoded} vs {original}");
+    }
+}
+
+#[cfg(feature = "pixel-jpegls")]
+#[test]
+fn jpegls_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jpegls().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.80"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+}

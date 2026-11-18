@@ -14,6 +14,9 @@ use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::file::DicomFile;
 use crate::tag::Tag;
+use crate::transfer_syntax::TransferSyntax;
+use crate::value::Value;
+use crate::vr::Vr;
 
 /// SOP Class UID of a media storage directory (`1.2.840.10008.1.3.10`).
 pub const MEDIA_STORAGE_DIRECTORY_STORAGE: &str = "1.2.840.10008.1.3.10";
@@ -170,6 +173,245 @@ fn has_offset(record: &DataSet, tag: Tag, endian: Endian) -> Result<bool> {
     }
 }
 
+/// A record and the records below it, for building a directory.
+#[derive(Clone, Debug)]
+pub struct DirectoryEntry {
+    /// The record's own attributes.
+    pub record: DataSet,
+    /// The records to store below this one.
+    pub children: Vec<DirectoryEntry>,
+}
+
+impl DirectoryEntry {
+    /// A record with no children.
+    pub fn new(record: DataSet) -> Self {
+        Self {
+            record,
+            children: Vec::new(),
+        }
+    }
+}
+
+/// One record in the pre-order layout the file will store.
+struct FlatNode {
+    dataset: DataSet,
+    next: Option<usize>,
+    child: Option<usize>,
+}
+
+struct Flat {
+    nodes: Vec<FlatNode>,
+    roots: Vec<usize>,
+}
+
+impl DicomDir {
+    /// Build a directory whose records are stored in one pre-order traversal.
+    ///
+    /// The offsets are placeholders until [`DicomDir::write`] lays the records out; the flags
+    /// that say whether a record has children or a sibling are set now.
+    pub fn build(
+        file_set_id: &str,
+        sop_instance_uid: &str,
+        records: Vec<DirectoryEntry>,
+    ) -> Result<Self> {
+        let mut set = DataSet::new();
+        set.set_string(tags::SOP_CLASS_UID, Vr::Ui, MEDIA_STORAGE_DIRECTORY_STORAGE);
+        set.set_string(tags::SOP_INSTANCE_UID, Vr::Ui, sop_instance_uid);
+        set.set_string(tags::FILE_SET_ID, Vr::Cs, file_set_id);
+        set.set(
+            tags::FILE_SET_CONSISTENCY_FLAG,
+            Vr::Us,
+            Value::from_u16s(&[0]),
+        );
+        set.set(
+            tags::OFFSET_OF_THE_FIRST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[0]),
+        );
+        set.set(
+            tags::OFFSET_OF_THE_LAST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[0]),
+        );
+        let flat = flatten(&records);
+        let stored = flat
+            .nodes
+            .iter()
+            .map(|node| {
+                let mut record = node.dataset.clone();
+                record.set(
+                    tags::OFFSET_OF_THE_NEXT_DIRECTORY_RECORD,
+                    Vr::Ul,
+                    Value::from_u32s(&[u32::from(node.next.is_some())]),
+                );
+                record.set(
+                    tags::OFFSET_OF_REFERENCED_LOWER_LEVEL_DIRECTORY_ENTITY,
+                    Vr::Ul,
+                    Value::from_u32s(&[u32::from(node.child.is_some())]),
+                );
+                record
+            })
+            .collect();
+        set.set(
+            tags::DIRECTORY_RECORD_SEQUENCE,
+            Vr::Sq,
+            Value::sequence(stored),
+        );
+        let file = DicomFile::new(set, TransferSyntax::ExplicitVrLittleEndian)?;
+        Self::from_file(file)
+    }
+
+    /// Encode the directory with the byte offsets computed from the record order.
+    ///
+    /// PS3.10 measures the offsets from the beginning of the file, so the layout is worked out
+    /// first and the records are then written with the offsets they landed at. The offset
+    /// attributes are `UL`, so filling them in changes no length and the layout stays valid.
+    pub fn write(&self) -> Result<Vec<u8>> {
+        let syntax = TransferSyntax::ExplicitVrLittleEndian;
+        let tree = self.owned_tree()?;
+        let flat = flatten(&tree);
+
+        let mut meta = Vec::new();
+        crate::writer::write_data_set(&self.file.meta, syntax, &mut meta)?;
+
+        let mut base = self.file.dataset.clone();
+        base.remove(tags::DIRECTORY_RECORD_SEQUENCE);
+        // Every offset attribute exists before the first pass, so filling it in cannot change
+        // the layout.
+        base.set(
+            tags::OFFSET_OF_THE_FIRST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[0]),
+        );
+        base.set(
+            tags::OFFSET_OF_THE_LAST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[0]),
+        );
+
+        let mut payloads = Vec::with_capacity(flat.nodes.len());
+        for node in &flat.nodes {
+            payloads.push(record_payload(&node.dataset, syntax)?);
+        }
+
+        let mut base_buf = Vec::new();
+        crate::writer::write_data_set(&base, syntax, &mut base_buf)?;
+        // preamble (128) + "DICM" (4) + meta + the data set before the sequence + the sequence
+        // element's header (tag, VR, reserved, length) of 12 bytes.
+        // `sequence_start` already points past the sequence element's header, at its first item.
+        let sequence_start = PREAMBLE_LENGTH + 4 + meta.len() + base_buf.len() + 12;
+        let mut starts = Vec::with_capacity(payloads.len());
+        let mut cursor = sequence_start;
+        for payload in &payloads {
+            starts.push(cursor as u32);
+            cursor += payload.len() + 8;
+        }
+
+        // Second pass: the offsets the records will be read back at.
+        let mut payloads = Vec::with_capacity(flat.nodes.len());
+        for node in &flat.nodes {
+            let mut record = node.dataset.clone();
+            let next = node.next.map_or(0, |index| starts[index]);
+            let child = node.child.map_or(0, |index| starts[index]);
+            record.set(
+                tags::OFFSET_OF_THE_NEXT_DIRECTORY_RECORD,
+                Vr::Ul,
+                Value::from_u32s(&[next]),
+            );
+            record.set(
+                tags::OFFSET_OF_REFERENCED_LOWER_LEVEL_DIRECTORY_ENTITY,
+                Vr::Ul,
+                Value::from_u32s(&[child]),
+            );
+            payloads.push(record_payload(&record, syntax)?);
+        }
+
+        let first = flat.roots.first().map_or(0, |index| starts[*index]);
+        let last = flat.roots.last().map_or(0, |index| starts[*index]);
+        base.set(
+            tags::OFFSET_OF_THE_FIRST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[first]),
+        );
+        base.set(
+            tags::OFFSET_OF_THE_LAST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+            Vr::Ul,
+            Value::from_u32s(&[last]),
+        );
+        let mut base_buf = Vec::new();
+        crate::writer::write_data_set(&base, syntax, &mut base_buf)?;
+
+        let mut out = Vec::with_capacity(
+            sequence_start + 12 + payloads.iter().map(Vec::len).sum::<usize>() + 8,
+        );
+        out.extend_from_slice(&[0u8; PREAMBLE_LENGTH]);
+        out.extend_from_slice(b"DICM");
+        out.extend_from_slice(&meta);
+        out.extend_from_slice(&base_buf);
+        // The Directory Record Sequence, written with an undefined length because its offsets
+        // are computed from this very layout.
+        out.extend_from_slice(&[0x04, 0x00, 0x20, 0x12]);
+        out.extend_from_slice(b"SQ");
+        out.extend_from_slice(&[0x00, 0x00]);
+        out.extend_from_slice(&u32::MAX.to_le_bytes());
+        for payload in &payloads {
+            out.extend_from_slice(&[0xFE, 0xFF, 0x00, 0xE0]);
+            out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            out.extend_from_slice(payload);
+        }
+        out.extend_from_slice(&[0xFE, 0xFF, 0xDD, 0xE0, 0x00, 0x00, 0x00, 0x00]);
+        Ok(out)
+    }
+
+    /// The records as owned entries, in the order the file stores them.
+    fn owned_tree(&self) -> Result<Vec<DirectoryEntry>> {
+        Ok(self.roots()?.iter().map(owned_entry).collect())
+    }
+}
+
+fn owned_entry(node: &DirectoryRecord<'_>) -> DirectoryEntry {
+    DirectoryEntry {
+        record: node.dataset.clone(),
+        children: node.children.iter().map(owned_entry).collect(),
+    }
+}
+
+fn record_payload(record: &DataSet, syntax: TransferSyntax) -> Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    crate::writer::write_data_set(record, syntax, &mut payload)?;
+    Ok(payload)
+}
+
+fn flatten(entries: &[DirectoryEntry]) -> Flat {
+    let mut nodes = Vec::new();
+    let roots = place_chain(entries, &mut nodes);
+    Flat { nodes, roots }
+}
+
+/// Assign the pre-order index of every record, linking each to its sibling and its first child.
+fn place_chain(entries: &[DirectoryEntry], nodes: &mut Vec<FlatNode>) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for entry in entries {
+        let index = nodes.len();
+        nodes.push(FlatNode {
+            dataset: entry.record.clone(),
+            next: None,
+            child: None,
+        });
+        let children = place_chain(&entry.children, nodes);
+        if let Some(first) = children.first() {
+            nodes[index].child = Some(*first);
+        }
+        indices.push(index);
+    }
+    for pair in indices.windows(2) {
+        nodes[pair[0]].next = Some(pair[1]);
+    }
+    indices
+}
+
+const PREAMBLE_LENGTH: usize = 128;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +539,118 @@ mod tests {
         let directory = DicomDir::from_file(file).expect("directory");
         let roots = directory.roots().expect("roots");
         assert_eq!(roots[0].record_type().expect("type"), None);
+    }
+
+    fn entry(kind: &str, children: Vec<DirectoryEntry>) -> DirectoryEntry {
+        let mut record = DataSet::new();
+        record.set_string(tags::DIRECTORY_RECORD_TYPE, Vr::Cs, kind);
+        DirectoryEntry { record, children }
+    }
+
+    /// PATIENT > STUDY > SERIES > (IMAGE, IMAGE).
+    fn tree() -> Vec<DirectoryEntry> {
+        vec![entry(
+            "PATIENT",
+            vec![entry(
+                "STUDY",
+                vec![entry(
+                    "SERIES",
+                    vec![entry("IMAGE", Vec::new()), entry("IMAGE", Vec::new())],
+                )],
+            )],
+        )]
+    }
+
+    fn offset(record: &DataSet, tag: Tag) -> u32 {
+        record
+            .element(tag)
+            .unwrap_or_else(|_| panic!("{tag} is missing"))
+            .u32s(Endian::Little)
+            .expect("offset")[0]
+    }
+
+    fn item_positions(bytes: &[u8]) -> Vec<usize> {
+        bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, window)| window == &[0xFE, 0xFF, 0x00, 0xE0])
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    #[test]
+    fn a_built_directory_round_trips_with_its_tree() {
+        let directory = DicomDir::build("FILMSET", "1.2.3", tree()).expect("build");
+        let bytes = directory.write().expect("write");
+
+        let read = DicomDir::read(&bytes).expect("read");
+        assert_eq!(read.file_set_id().expect("id"), Some("FILMSET"));
+        let roots = read.roots().expect("roots");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].record_type().expect("type"), Some("PATIENT"));
+        assert_eq!(roots[0].count(), 5);
+        assert_eq!(
+            roots[0].children[0].children[0].children.len(),
+            2,
+            "the two IMAGE records sit under the SERIES"
+        );
+    }
+
+    #[test]
+    fn the_offsets_point_at_the_items_they_name() {
+        let directory = DicomDir::build("FILMSET", "1.2.3", tree()).expect("build");
+        let bytes = directory.write().expect("write");
+        let read = DicomDir::read(&bytes).expect("read");
+        let items = item_positions(&bytes);
+        assert_eq!(items.len(), 5, "one item per record");
+
+        let first = offset(
+            &read.file().dataset,
+            tags::OFFSET_OF_THE_FIRST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY,
+        ) as usize;
+        assert_eq!(first, items[0], "the root record's offset is its item");
+
+        let records = read.records().expect("records");
+        // PATIENT has a child: the STUDY item right after it.
+        assert_eq!(
+            offset(
+                &records[0],
+                tags::OFFSET_OF_REFERENCED_LOWER_LEVEL_DIRECTORY_ENTITY
+            ) as usize,
+            items[1]
+        );
+        // STUDY has no sibling.
+        assert_eq!(
+            offset(&records[1], tags::OFFSET_OF_THE_NEXT_DIRECTORY_RECORD),
+            0
+        );
+        // SERIES has a child, and its first IMAGE has a sibling: the second IMAGE.
+        assert_eq!(
+            offset(
+                &records[2],
+                tags::OFFSET_OF_REFERENCED_LOWER_LEVEL_DIRECTORY_ENTITY
+            ) as usize,
+            items[3]
+        );
+        assert_eq!(
+            offset(&records[3], tags::OFFSET_OF_THE_NEXT_DIRECTORY_RECORD) as usize,
+            items[4]
+        );
+    }
+
+    #[test]
+    fn an_empty_directory_writes_offsets_of_zero() {
+        let directory = DicomDir::build("FILMSET", "1.2.3", Vec::new()).expect("build");
+        let bytes = directory.write().expect("write");
+        let read = DicomDir::read(&bytes).expect("read");
+        assert!(read.roots().expect("roots").is_empty());
+        assert_eq!(
+            offset(
+                &read.file().dataset,
+                tags::OFFSET_OF_THE_FIRST_DIRECTORY_RECORD_OF_THE_ROOT_DIRECTORY_ENTITY
+            ),
+            0
+        );
     }
 
     #[test]
