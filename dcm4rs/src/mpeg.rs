@@ -187,7 +187,12 @@ impl DataSet {
     pub fn mpeg2_sequence_header(&self) -> crate::Result<Option<SequenceHeader>> {
         // Native Pixel Data has no fragments and therefore no video: a JPEG or RLE data set
         // asking this question gets an answer, not an error.
-        if self.element(tags::PIXEL_DATA)?.value.as_fragments().is_none() {
+        if self
+            .element(tags::PIXEL_DATA)?
+            .value
+            .as_fragments()
+            .is_none()
+        {
             return Ok(None);
         }
         for frame in self.encapsulated_frames()? {
