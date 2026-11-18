@@ -42,6 +42,7 @@ mod element;
 mod endian;
 mod error;
 mod file;
+mod json;
 mod private_block;
 mod private_dict;
 mod read_options;
