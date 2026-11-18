@@ -172,10 +172,13 @@ Implemented: data model and dictionary, Part 10 read/write, character set conver
 private dictionary registration, typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM`
 and `DT`), RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS / JPEG 2000 / JPEG XL decoding.
 
+MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
+of `encapsulated_frames` as the compressed bitstreams they are, `mpeg2_sequence_header` reads the
+MPEG-2 sequence header into Rows, Columns, Cine Rate, Frame Time and Pixel Aspect Ratio, and
+asking for a pixel reports `Error::UnsupportedPixelData`.
+
 Not implemented yet:
 
-- MPEG pixel data; those frames are carried through compressed and report
-  `Error::UnsupportedPixelData` on decode.
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
 - Python-side conveniences such as JSON, deferred reads and `private_block`.
 

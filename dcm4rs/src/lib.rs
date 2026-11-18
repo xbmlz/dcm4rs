@@ -53,6 +53,7 @@ mod writer;
 
 pub mod dictionary;
 pub mod encaps;
+pub mod mpeg;
 pub mod pixels;
 pub mod uid;
 pub mod valuerep;
