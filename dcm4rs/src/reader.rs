@@ -33,6 +33,8 @@ pub(crate) struct Reader<'a> {
     private_creators: HashMap<(u16, u16), String>,
     /// Relaxations asked for by the caller; the default reads strictly.
     options: ReadOptions,
+    /// Duplicate tags seen so far, shared by the data set and the items it contains.
+    duplicates: Vec<Tag>,
 }
 
 impl<'a> Reader<'a> {
@@ -54,6 +56,7 @@ impl<'a> Reader<'a> {
             private_dictionary,
             private_creators: HashMap::new(),
             options,
+            duplicates: Vec::new(),
         }
     }
 
@@ -115,6 +118,7 @@ impl<'a> Reader<'a> {
     pub(crate) fn read_data_set(&mut self, end: usize, stop_at_delimiter: bool) -> Result<DataSet> {
         let mut set = DataSet::with_endian(self.endian());
         set.set_charset(self.charset);
+        let first_duplicate = self.duplicates.len();
         while self.position < end {
             if stop_at_delimiter && self.peek_tag()?.group() == 0xFFFE {
                 break;
@@ -138,12 +142,15 @@ impl<'a> Reader<'a> {
                 self.charset = charset;
             }
             // pydicom warns about duplicates and ignores the later one (pydicom/filereader.py:
-            // 441-444, 517-532); we keep the first occurrence silently.
-            if !set.contains(element.tag) {
+            // 441-444, 517-532); we keep the first occurrence and list the tag instead.
+            if set.contains(element.tag) {
+                self.duplicates.push(element.tag);
+            } else {
                 set.insert(element);
             }
             set.set_charset(self.charset);
         }
+        set.set_duplicates(self.duplicates[first_duplicate..].to_vec());
         Ok(set)
     }
 
