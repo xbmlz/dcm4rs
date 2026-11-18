@@ -63,6 +63,8 @@ pub enum Error {
     InvalidPixelData(String),
     /// The value is not a well-formed UID (VR `UI`, PS3.5 6.2).
     InvalidUid(String),
+    /// The value does not satisfy the VR's own rules (PS3.5 6.2).
+    InvalidValue(String),
     /// A file could not be read from disk.
     Io(String),
 }
@@ -114,6 +116,7 @@ impl fmt::Display for Error {
             }
             Self::InvalidPixelData(message) => write!(f, "invalid pixel data: {message}"),
             Self::InvalidUid(value) => write!(f, "invalid UID: {value}"),
+            Self::InvalidValue(message) => write!(f, "invalid value: {message}"),
             Self::Io(message) => write!(f, "I/O error: {message}"),
         }
     }
