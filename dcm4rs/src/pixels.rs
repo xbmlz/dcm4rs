@@ -7,8 +7,11 @@
 //!
 //! RLE Lossless (PS3.5 Annex G) and JPEG Lossless (Process 14) are decoded here. JPEG
 //! (eight-bit baseline and progressive, and the 12-bit extended process), JPEG-LS, JPEG
-//! 2000/HTJ2K and JPEG XL are feature-gated additions; MPEG reports
-//! [`Error::UnsupportedPixelData`].
+//! 2000/HTJ2K and JPEG XL are feature-gated additions.
+//!
+//! MPEG video is not decoded: [`DataSet::encapsulated_frames`] returns its frames as the
+//! compressed bitstreams they are, [`Error::UnsupportedPixelData`] when a pixel is asked for, and
+//! [`crate::mpeg`] reads the sequence header for the attributes a viewer needs.
 
 use std::fmt;
 
