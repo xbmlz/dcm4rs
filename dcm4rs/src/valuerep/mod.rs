@@ -7,10 +7,12 @@
 //! on demand and keep the original text, so nothing is lost when a value is read and written
 //! back unmodified — the same reason pydicom's `DSfloat` keeps `original_string`.
 
+mod date_time;
 mod decimal_string;
 mod integer_string;
 mod person_name;
 
+pub use date_time::{Date, DateTime, Time};
 pub use decimal_string::DecimalString;
 pub use integer_string::IntegerString;
 pub use person_name::PersonName;

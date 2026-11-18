@@ -8,7 +8,7 @@ use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::tag::Tag;
 use crate::value::Value;
-use crate::valuerep::{DecimalString, IntegerString, PersonName};
+use crate::valuerep::{Date, DateTime, DecimalString, IntegerString, PersonName, Time};
 use crate::vr::Vr;
 
 /// An ordered collection of data elements, corresponding to one DICOM Data Set or one Item.
@@ -221,6 +221,33 @@ impl DataSet {
             values.push(IntegerString::parse(&part)?);
         }
         Ok(values)
+    }
+
+    /// Read the first date (`DA`).
+    pub fn date(&self, tag: Tag) -> Result<Date> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Da, "DA")?;
+        let values = self.strings(tag)?;
+        let text = values.first().ok_or(Error::NoValue(tag))?;
+        Date::parse(text)
+    }
+
+    /// Read the first time (`TM`).
+    pub fn time(&self, tag: Tag) -> Result<Time> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Tm, "TM")?;
+        let values = self.strings(tag)?;
+        let text = values.first().ok_or(Error::NoValue(tag))?;
+        Time::parse(text)
+    }
+
+    /// Read the first date-time (`DT`).
+    pub fn date_time(&self, tag: Tag) -> Result<DateTime> {
+        let element = self.element(tag)?;
+        require_vr(element, Vr::Dt, "DT")?;
+        let values = self.strings(tag)?;
+        let text = values.first().ok_or(Error::NoValue(tag))?;
+        DateTime::parse(text)
     }
 
     /// Read sequence items.

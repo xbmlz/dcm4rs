@@ -70,5 +70,5 @@ pub use tag::Tag;
 pub use transfer_syntax::TransferSyntax;
 pub use uid::Uid;
 pub use value::Value;
-pub use valuerep::{DecimalString, IntegerString, PersonName};
+pub use valuerep::{Date, DateTime, DecimalString, IntegerString, PersonName, Time};
 pub use vr::Vr;

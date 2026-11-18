@@ -1,10 +1,9 @@
 //! Ports of `pydicom/tests/test_valuerep.py` for the VRs with internal structure.
 //!
-//! Each case names the pydicom test it comes from. The date/time VRs (`DA`, `DT`, `TM`) are not
-//! covered yet: their types do not exist here.
+//! Each case names the pydicom test it comes from.
 
 use dcm4rs::dictionary::tags;
-use dcm4rs::{DataSet, DecimalString, IntegerString, PersonName, Vr};
+use dcm4rs::{DataSet, Date, DateTime, DecimalString, IntegerString, PersonName, Time, Vr};
 
 /// pydicom: `TestPersonName::test_last_first`
 #[test]
@@ -252,5 +251,179 @@ fn dataset_accessors_reject_the_wrong_vr() {
     ds.set_string(tags::PATIENT_NAME, Vr::Pn, "Doe^John");
     assert!(ds.decimal_strings(tags::PATIENT_NAME).is_err());
     assert!(ds.integer_strings(tags::PATIENT_NAME).is_err());
+    assert!(ds.date(tags::PATIENT_NAME).is_err());
+    assert!(ds.time(tags::PATIENT_NAME).is_err());
+    assert!(ds.date_time(tags::PATIENT_NAME).is_err());
     assert!(ds.person_name(tags::PATIENT_NAME).is_ok());
+}
+
+/// pydicom: `TestTM::test_new_str_conversion`
+#[test]
+fn time_reads_reduced_precision() {
+    let hour = Time::parse("21").expect("time");
+    assert_eq!((hour.hour(), hour.minute(), hour.second()), (21, 0, 0));
+
+    let minute = Time::parse("2122").expect("time");
+    assert_eq!(
+        (minute.hour(), minute.minute(), minute.second()),
+        (21, 22, 0)
+    );
+
+    let second = Time::parse("212223").expect("time");
+    assert_eq!(second.second(), 23);
+    assert_eq!(second.to_string(), "212223");
+}
+
+/// pydicom: `TestTM::test_str_and_repr` and `test_time_behavior`
+#[test]
+fn time_keeps_its_fraction() {
+    let time = Time::parse("212223.1234").expect("time");
+    assert_eq!(time.microsecond(), 123_400);
+    assert_eq!(time.text(), "212223.1234");
+
+    let six_digits = Time::parse("010203.123456").expect("time");
+    assert_eq!(six_digits.microsecond(), 123_456);
+    // PS3.5 allows padding spaces around the value.
+    let padded = Time::parse("  212223  ").expect("time");
+    assert_eq!(padded.text(), "212223");
+}
+
+/// pydicom: `TestTM::test_new_str_conversion` — non-conformant values
+#[test]
+fn time_rejects_non_conformant_values() {
+    for invalid in ["24", "2360", "235", "", "abc", "23:59", "212223.1234567"] {
+        assert!(Time::parse(invalid).is_err(), "{invalid:?} should fail");
+    }
+}
+
+/// pydicom: `TestTM::test_new_str_conversion` — the leap second
+///
+/// pydicom lowers `235960` to `23:59:59` with a warning because Python's `time` cannot hold
+/// 60; PS3.5 allows it, so it is kept here.
+#[test]
+fn time_keeps_a_leap_second() {
+    let time = Time::parse("235960").expect("leap second");
+    assert_eq!(time.second(), 60);
+    assert_eq!(time.text(), "235960");
+}
+
+#[test]
+fn time_orders_by_the_clock() {
+    let earlier = Time::parse("010203").expect("time");
+    let later = Time::parse("010203.123456").expect("time");
+    assert!(earlier < later);
+    let next_second = Time::parse("010204").expect("time");
+    assert!(later < next_second);
+}
+
+/// pydicom: `TestDA::test_str_and_repr`
+#[test]
+fn date_parses_both_spellings() {
+    let plain = Date::parse("19111213").expect("date");
+    let dotted = Date::parse("1911.12.13").expect("date");
+    assert_eq!((plain.year(), plain.month(), plain.day()), (1911, 12, 13));
+    // Equality is by the date, not by the characters: pydicom compares against `date` too.
+    assert_eq!(plain, dotted);
+    assert_eq!(plain.text(), "19111213");
+    assert_eq!(dotted.text(), "1911.12.13");
+}
+
+/// pydicom: `TestDA::test_date_behavior` — impossible dates are refused, as Python's `date`
+/// refuses them
+#[test]
+fn date_rejects_impossible_dates() {
+    for invalid in ["20010230", "20011301", "00000203", "20210132", "19111.213"] {
+        assert!(Date::parse(invalid).is_err(), "{invalid:?} should fail");
+    }
+    assert!(Date::parse("20000229").is_ok());
+    assert!(Date::parse("19000229").is_err());
+}
+
+/// pydicom: `TestDT::test_new_obj_conversion` — a `DT` may stop anywhere
+#[test]
+fn date_time_reads_partial_values() {
+    let year_only = DateTime::parse("1001").expect("date-time");
+    assert_eq!(
+        (year_only.year(), year_only.month(), year_only.day()),
+        (1001, 1, 1)
+    );
+    assert!(!year_only.has_time());
+
+    let date_only = DateTime::parse("10010203").expect("date-time");
+    assert_eq!(date_only.day(), 3);
+    assert!(!date_only.has_time());
+
+    let full = DateTime::parse("19111213212123").expect("date-time");
+    assert_eq!((full.hour(), full.minute(), full.second()), (21, 21, 23));
+    assert!(full.has_time());
+}
+
+/// pydicom: `TestDT::test_str_and_repr` — the UTC offset suffix
+#[test]
+fn date_time_reads_the_utc_offset() {
+    let west = DateTime::parse("19111213212123-0630").expect("date-time");
+    assert_eq!(west.offset_minutes(), Some(-390));
+
+    let east = DateTime::parse("20220102080907.123456+0600").expect("date-time");
+    assert_eq!(east.microsecond(), 123_456);
+    assert_eq!(east.offset_minutes(), Some(360));
+    assert_eq!(east.text(), "20220102080907.123456+0600");
+
+    let none = DateTime::parse("20220101").expect("date-time");
+    assert_eq!(none.offset_minutes(), None);
+}
+
+/// pydicom: `TestDT::test_new_str_conversion` — the leap second
+#[test]
+fn date_time_keeps_a_leap_second() {
+    let value = DateTime::parse("20010101235960").expect("leap second");
+    assert_eq!(value.second(), 60);
+    assert_eq!(value.text(), "20010101235960");
+}
+
+/// pydicom: `TestDT::test_new_str_conversion` — non-conformant values, and the length limit
+#[test]
+fn date_time_rejects_non_conformant_values() {
+    for invalid in [
+        "a2000,00,00",
+        "2001.5",
+        "202213",
+        "20221123+2400",
+        "19111213+06300",
+    ] {
+        assert!(DateTime::parse(invalid).is_err(), "{invalid:?} should fail");
+    }
+    // PS3.5 caps a date-time at 26 characters, which is checked before parsing.
+    assert!(DateTime::parse(&format!("{}99", "2".repeat(25))).is_err());
+}
+
+#[test]
+fn date_time_equality_ignores_missing_zeros() {
+    let partial = DateTime::parse("20220101").expect("date-time");
+    let full = DateTime::parse("20220101000000").expect("date-time");
+    assert_eq!(partial, full);
+}
+
+#[test]
+fn dataset_reads_temporal_values() {
+    let mut ds = DataSet::new();
+    ds.set_string(tags::STUDY_DATE, Vr::Da, "20110305");
+    ds.set_string(tags::STUDY_TIME, Vr::Tm, "134455.123");
+    ds.set_string(
+        tags::ACQUISITION_DATE_TIME,
+        Vr::Dt,
+        "20110305134455.123-0500",
+    );
+
+    let date = ds.date(tags::STUDY_DATE).expect("study date");
+    assert_eq!((date.year(), date.month(), date.day()), (2011, 3, 5));
+
+    let time = ds.time(tags::STUDY_TIME).expect("study time");
+    assert_eq!(time.microsecond(), 123_000);
+
+    let date_time = ds
+        .date_time(tags::ACQUISITION_DATE_TIME)
+        .expect("acquisition");
+    assert_eq!(date_time.offset_minutes(), Some(-300));
+    assert_eq!(date_time.second(), 55);
 }
