@@ -8,6 +8,7 @@ use crate::element::Element;
 use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::private_dict::PrivateDictionary;
+use crate::read_options::ReadOptions;
 use crate::tag::Tag;
 use crate::transfer_syntax::TransferSyntax;
 use crate::value::Value;
@@ -30,17 +31,20 @@ pub(crate) struct Reader<'a> {
     private_dictionary: Option<&'a PrivateDictionary>,
     /// Private creators in force, keyed by `(group, block)`; sequence items inherit and restore.
     private_creators: HashMap<(u16, u16), String>,
+    /// Relaxations asked for by the caller; the default reads strictly.
+    options: ReadOptions,
 }
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(data: &'a [u8], syntax: TransferSyntax) -> Self {
-        Self::new_with(data, syntax, None)
+        Self::new_with(data, syntax, None, ReadOptions::default())
     }
 
     pub(crate) fn new_with(
         data: &'a [u8],
         syntax: TransferSyntax,
         private_dictionary: Option<&'a PrivateDictionary>,
+        options: ReadOptions,
     ) -> Self {
         Self {
             data,
@@ -49,6 +53,7 @@ impl<'a> Reader<'a> {
             charset: Charset::default(),
             private_dictionary,
             private_creators: HashMap::new(),
+            options,
         }
     }
 
@@ -184,6 +189,10 @@ impl<'a> Reader<'a> {
                 // delimiter.
                 vr = Vr::Sq;
                 Value::sequence(self.read_items_undefined()?)
+            } else if self.options.lenient_undefined_length {
+                // pydicom's `read_undefined_length_value`: the bytes before the item delimiter
+                // are the value, whatever VR the element claims.
+                Value::from_bytes(self.read_undefined_value()?)
             } else {
                 return Err(Error::InvalidData {
                     offset: self.position,
@@ -312,6 +321,47 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Read a value whose length is undefined but whose VR is not a sequence or a byte value by
+    /// scanning to the item delimiter that ends it.
+    ///
+    /// This mirrors pydicom's `read_undefined_length_value`: the delimiter is searched for byte
+    /// by byte, so a value that happens to contain the delimiter's four bytes would end early.
+    /// The same limitation applies to pydicom.
+    fn read_undefined_value(&mut self) -> Result<Vec<u8>> {
+        let start = self.position;
+        let delimiter = self.delimiter_bytes();
+        let mut position = start;
+        while position + 4 <= self.data.len() {
+            if self.data[position..position + 4] == delimiter {
+                let end = position;
+                if end + 8 > self.data.len() {
+                    return Err(Error::UnexpectedEof { offset: end });
+                }
+                let value = self.data[start..end].to_vec();
+                // The delimiter is `(FFFE,E00D)` plus its four-byte length, which reads as zero.
+                self.position = end + 8;
+                return Ok(value);
+            }
+            position += 1;
+        }
+        Err(Error::UnexpectedEof { offset: start })
+    }
+
+    /// The four bytes of the item delimiter in this reader's byte order.
+    fn delimiter_bytes(&self) -> [u8; 4] {
+        let (group, element) = match self.endian() {
+            Endian::Little => (
+                ITEM_DELIMITER.group().to_le_bytes(),
+                ITEM_DELIMITER.element().to_le_bytes(),
+            ),
+            Endian::Big => (
+                ITEM_DELIMITER.group().to_be_bytes(),
+                ITEM_DELIMITER.element().to_be_bytes(),
+            ),
+        };
+        [group[0], group[1], element[0], element[1]]
+    }
+
     fn expect_delimiter(&mut self, expected: Tag, reason: &'static str) -> Result<()> {
         let offset = self.position;
         let tag = self.read_tag()?;
@@ -424,7 +474,16 @@ impl DataSet {
     ///
     /// The returned data set carries the byte order of the syntax, see [`DataSet::endian`].
     pub fn read(bytes: &[u8], syntax: TransferSyntax) -> Result<Self> {
-        Self::read_inner(bytes, syntax, None)
+        Self::read_inner(bytes, syntax, None, ReadOptions::default())
+    }
+
+    /// Read a data set encoded with `syntax`, applying [`ReadOptions`].
+    pub fn read_with_options(
+        bytes: &[u8],
+        syntax: TransferSyntax,
+        options: ReadOptions,
+    ) -> Result<Self> {
+        Self::read_inner(bytes, syntax, None, options)
     }
 
     /// Read a data set while resolving private element VRs from `private_dictionary`.
@@ -435,13 +494,19 @@ impl DataSet {
         syntax: TransferSyntax,
         private_dictionary: &PrivateDictionary,
     ) -> Result<Self> {
-        Self::read_inner(bytes, syntax, Some(private_dictionary))
+        Self::read_inner(
+            bytes,
+            syntax,
+            Some(private_dictionary),
+            ReadOptions::default(),
+        )
     }
 
-    fn read_inner(
+    pub(crate) fn read_inner(
         bytes: &[u8],
         syntax: TransferSyntax,
         private_dictionary: Option<&PrivateDictionary>,
+        options: ReadOptions,
     ) -> Result<Self> {
         if syntax == TransferSyntax::DeflatedExplicitVrLittleEndian {
             let mut decoder = flate2::read::DeflateDecoder::new(bytes);
@@ -456,10 +521,11 @@ impl DataSet {
                 &inflated,
                 TransferSyntax::ExplicitVrLittleEndian,
                 private_dictionary,
+                options,
             );
             return reader.read_data_set(inflated.len(), false);
         }
-        let mut reader = Reader::new_with(bytes, syntax, private_dictionary);
+        let mut reader = Reader::new_with(bytes, syntax, private_dictionary, options);
         reader.read_data_set(bytes.len(), false)
     }
 }

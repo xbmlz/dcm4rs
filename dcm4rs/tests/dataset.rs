@@ -4,9 +4,8 @@
 //! endianness effects on numeric decoding, sequence nesting, private tags and group length
 //! elements.
 //!
-//! Divergences from pydicom, asserted below and listed in the README:
-//! `DataSet` equality includes the byte order, and there is no `__str__` dump, no
-//! `walk`/`iterall` callback API and no `private_block` helper yet.
+//! Divergences from pydicom, asserted below and listed in the README: there is no `__str__`
+//! dump, no `walk`/`iterall` callback API and no `private_block` helper yet.
 
 mod common;
 
@@ -75,7 +74,7 @@ fn keyword_lookup_drives_access() {
 }
 
 #[test]
-fn equality_compares_elements_and_endian() {
+fn equality_compares_elements_only() {
     let mut a = DataSet::new();
     a.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
     let b = a.clone();
@@ -89,10 +88,12 @@ fn equality_compares_elements_and_endian() {
     different_vr.set_string(tag(0x0010, 0x0010), Vr::Lo, "Doe^John");
     assert_ne!(a, different_vr);
 
-    // Divergence from pydicom: the byte order is part of equality.
+    // The byte order is reading state, not content, so it does not take part — pydicom's data
+    // sets have no byte order at all. The numbers decode differently until `to_endian` makes
+    // them agree, which is why the two are only equal as stored.
     let mut big = DataSet::with_endian(Endian::Big);
     big.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
-    assert_ne!(a, big);
+    assert_eq!(a, big);
 }
 
 #[test]

@@ -16,7 +16,7 @@ use crate::vr::Vr;
 /// Elements are stored in ascending tag order, exactly as required when writing a data set.
 /// When the same tag appears twice the later one replaces the earlier; consistency warnings are
 /// reported by the parser layer.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct DataSet {
     elements: BTreeMap<Tag, Element>,
     endian: Endian,
@@ -270,6 +270,19 @@ impl DataSet {
         self.set(tag, Vr::Sq, Value::sequence(items));
     }
 }
+
+/// Two data sets are equal when they hold the same elements.
+///
+/// The byte order and the inherited character set are reading state rather than content, so they
+/// do not take part: the same numbers in another byte order compare equal here, even though they
+/// decode differently until [`DataSet::to_endian`] makes the two agree.
+impl PartialEq for DataSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.elements == other.elements
+    }
+}
+
+impl Eq for DataSet {}
 
 /// Reject an element whose VR is not the one the accessor expects.
 fn require_vr(element: &Element, vr: Vr, name: &'static str) -> Result<()> {
