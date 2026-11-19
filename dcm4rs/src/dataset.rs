@@ -287,6 +287,103 @@ impl DataSet {
     }
 }
 
+impl DataSet {
+    /// Iterate every element, descending into the items of sequences.
+    pub fn walk(&self) -> impl Iterator<Item = &Element> + '_ {
+        self.walk_with_path().map(|(_, element)| element)
+    }
+
+    /// Iterate every element with the dotted path that finds it.
+    ///
+    /// The path names an element by its keyword where the dictionary has one and by its tag
+    /// otherwise, and numbers sequence items, as in
+    /// `ReferencedStudySequence[0].ReferencedSOPClassUID`. A sequence element comes before the
+    /// elements of its items, so the order follows the nesting.
+    pub fn walk_with_path(&self) -> impl Iterator<Item = (String, &Element)> + '_ {
+        Walk {
+            frames: vec![Frame {
+                prefix: String::new(),
+                elements: self.iter().collect::<Vec<_>>().into_iter(),
+            }],
+        }
+    }
+
+    /// Remove every private element, descending into the items of sequences.
+    ///
+    /// Private elements are those in an odd group other than the reserved ones, the set
+    /// [`Tag::is_private`] reports, which is what pydicom's `remove_private_tags` does too.
+    pub fn remove_private_tags(&mut self) {
+        self.elements.retain(|tag, _| !tag.is_private());
+        for element in self.elements.values_mut() {
+            if let Value::Sequence(items) = &mut element.value {
+                for item in items {
+                    item.remove_private_tags();
+                }
+            }
+        }
+    }
+
+    /// A data set holding the elements of one group.
+    ///
+    /// The copy keeps the byte order and the inherited character set, and shares nothing with
+    /// the original. pydicom's `group_dataset` returns the same selection.
+    pub fn group_dataset(&self, group: u16) -> Self {
+        let mut set = Self::with_endian(self.endian);
+        set.charset = self.charset;
+        for element in self.iter().filter(|element| element.tag.group() == group) {
+            set.elements.insert(element.tag, element.clone());
+        }
+        set
+    }
+}
+
+/// Depth-first walk over a data set and the items of its sequences.
+struct Walk<'a> {
+    frames: Vec<Frame<'a>>,
+}
+
+struct Frame<'a> {
+    prefix: String,
+    elements: std::vec::IntoIter<&'a Element>,
+}
+
+impl<'a> Iterator for Walk<'a> {
+    type Item = (String, &'a Element);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let frame = self.frames.last_mut()?;
+            let Some(element) = frame.elements.next() else {
+                self.frames.pop();
+                continue;
+            };
+            let name = element_name(element.tag);
+            let path = if frame.prefix.is_empty() {
+                name
+            } else {
+                format!("{}.{name}", frame.prefix)
+            };
+            if let Some(items) = element.value.as_sequence() {
+                for (index, item) in items.iter().enumerate().rev() {
+                    self.frames.push(Frame {
+                        prefix: format!("{path}[{index}]"),
+                        elements: item.iter().collect::<Vec<_>>().into_iter(),
+                    });
+                }
+            }
+            return Some((path, element));
+        }
+    }
+}
+
+/// The keyword of an element when the dictionary has one, its tag otherwise.
+fn element_name(tag: Tag) -> String {
+    match crate::dictionary::lookup(tag) {
+        Some(entry) => entry.keyword.to_owned(),
+        None => tag.to_string(),
+    }
+}
+
 /// Two data sets are equal when they hold the same elements.
 ///
 /// The byte order and the inherited character set are reading state rather than content, so they

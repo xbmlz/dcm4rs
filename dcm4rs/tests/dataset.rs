@@ -2,10 +2,10 @@
 //!
 //! Covered: element insertion, lookup, removal, ordering, keyword-driven access, equality,
 //! endianness effects on numeric decoding, sequence nesting, private tags and group length
-//! elements.
+//! elements, walking into sequence items, private tag removal and group selection.
 //!
 //! Divergences from pydicom, asserted below and listed in the README: there is no `__str__`
-//! dump, no `walk`/`iterall` callback API and no `private_block` helper yet.
+//! dump and no `private_block` helper yet.
 
 mod common;
 
@@ -321,4 +321,71 @@ fn typed_helpers_write_canonical_values() {
 
     set.set(tag(0x0028, 0x0120), Vr::Fd, Value::from_f64s(&[1.0, 2.0]));
     assert_eq!(set.f64s(tag(0x0028, 0x0120)).unwrap(), vec![1.0, 2.0]);
+}
+
+#[test]
+fn walk_descends_into_sequence_items() {
+    let mut item = DataSet::new();
+    item.set_string(tag(0x0008, 0x1155), Vr::Ui, "1.2.3");
+    let mut set = DataSet::new();
+    set.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
+    set.set_sequence(tag(0x0008, 0x1115), vec![item, DataSet::new()]);
+
+    let paths: Vec<String> = set.walk_with_path().map(|(path, _)| path).collect();
+    assert_eq!(
+        paths,
+        [
+            "ReferencedSeriesSequence",
+            "ReferencedSeriesSequence[0].ReferencedSOPInstanceUID",
+            "PatientName",
+        ]
+    );
+    assert_eq!(set.walk().count(), paths.len());
+
+    // A private element has no keyword, so the path falls back to the tag.
+    let mut set = DataSet::new();
+    set.set(tag(0x0011, 0x1001), Vr::Un, Value::from_bytes(vec![1]));
+    let paths: Vec<String> = set.walk_with_path().map(|(path, _)| path).collect();
+    assert_eq!(paths, ["(0011,1001)"]);
+}
+
+#[test]
+fn remove_private_tags_descends_into_sequence_items() {
+    let mut item = DataSet::new();
+    item.set(tag(0x0011, 0x1002), Vr::Un, Value::from_bytes(vec![1]));
+    item.set_string(tag(0x0008, 0x1155), Vr::Ui, "1.2.3");
+
+    let mut set = DataSet::new();
+    set.set(tag(0x0011, 0x0010), Vr::Lo, Value::from_str("ACME 1.0"));
+    set.set(tag(0x0011, 0x1001), Vr::Un, Value::from_bytes(vec![1, 2]));
+    set.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
+    set.set_sequence(tag(0x0008, 0x1115), vec![item]);
+
+    set.remove_private_tags();
+
+    assert!(set.get(tag(0x0011, 0x0010)).is_none());
+    assert!(set.get(tag(0x0011, 0x1001)).is_none());
+    assert_eq!(set.string(tag(0x0010, 0x0010)).unwrap(), "Doe^John");
+    let items = set.get(tag(0x0008, 0x1115)).unwrap().as_sequence().unwrap();
+    assert!(items[0].get(tag(0x0011, 0x1002)).is_none());
+    assert_eq!(items[0].string(tag(0x0008, 0x1155)).unwrap(), "1.2.3");
+}
+
+#[test]
+fn group_dataset_selects_one_group() {
+    let mut set = DataSet::with_endian(Endian::Big);
+    set.set_string(tag(0x0008, 0x0060), Vr::Cs, "CT");
+    set.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
+    set.set_string(tag(0x0010, 0x0020), Vr::Lo, "P123");
+
+    let group = set.group_dataset(0x0010);
+    assert_eq!(group.len(), 2);
+    assert_eq!(group.string(tag(0x0010, 0x0020)).unwrap(), "P123");
+    assert!(group.get(tag(0x0008, 0x0060)).is_none());
+    assert_eq!(group.endian(), Endian::Big);
+
+    // The copy is independent of the original.
+    let mut group = group;
+    group.set_string(tag(0x0010, 0x0040), Vr::Cs, "M");
+    assert_eq!(set.len(), 3);
 }
