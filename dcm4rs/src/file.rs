@@ -71,16 +71,39 @@ impl DicomFile {
         Self::read_inner(bytes, Some(private_dictionary), ReadOptions::default())
     }
 
+    /// Read a Part 10 file from any byte stream, buffering it in memory.
+    ///
+    /// This is the entry point for a file object or a network stream; the crate keeps the bytes,
+    /// so a deferred element can be read back later just as with [`read`](Self::read).
+    pub fn read_from(reader: impl std::io::Read) -> Result<Self> {
+        Self::read_from_with_options(reader, ReadOptions::default())
+    }
+
+    /// Read a Part 10 file from any byte stream, applying [`ReadOptions`].
+    pub fn read_from_with_options(
+        mut reader: impl std::io::Read,
+        options: ReadOptions,
+    ) -> Result<Self> {
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|err| Error::Io(err.to_string()))?;
+        Self::read_with_options(&bytes, options)
+    }
+
     fn read_inner(
         bytes: &[u8],
         private_dictionary: Option<&PrivateDictionary>,
         options: ReadOptions,
     ) -> Result<Self> {
         if bytes.len() < DICM_OFFSET + 4 || &bytes[DICM_OFFSET..DICM_OFFSET + 4] != b"DICM" {
-            return Err(Error::InvalidData {
-                offset: DICM_OFFSET,
-                reason: "missing DICM prefix",
-            });
+            if !options.no_preamble {
+                return Err(Error::InvalidData {
+                    offset: DICM_OFFSET,
+                    reason: "missing DICM prefix",
+                });
+            }
+            return Self::read_bare_data_set(bytes, private_dictionary, options);
         }
         let mut preamble = [0u8; PREAMBLE_LENGTH];
         preamble.copy_from_slice(&bytes[..PREAMBLE_LENGTH]);
@@ -109,6 +132,38 @@ impl DicomFile {
             meta,
             dataset,
             preamble,
+            source,
+            deferred,
+        })
+    }
+
+    /// Read a data set that carries no Part 10 wrapper, as [`ReadOptions::no_preamble`] asks.
+    ///
+    /// The file meta the result carries holds only `(0002,0010)`, the syntax that was assumed
+    /// while reading, so encoding the file again writes the wrapper the stream was missing.
+    fn read_bare_data_set(
+        bytes: &[u8],
+        private_dictionary: Option<&PrivateDictionary>,
+        options: ReadOptions,
+    ) -> Result<Self> {
+        let syntax = options.assumed_syntax;
+        let (dataset, deferred) =
+            DataSet::read_inner_with_deferred(bytes, syntax, private_dictionary, options)?;
+        let mut meta = DataSet::new();
+        meta.set(
+            tags::TRANSFER_SYNTAX_UID,
+            Vr::Ui,
+            Value::from_str(syntax.uid()),
+        );
+        let source = if deferred.is_empty() {
+            None
+        } else {
+            Some(Source::Bytes(bytes.to_vec()))
+        };
+        Ok(Self {
+            meta,
+            dataset,
+            preamble: [0u8; PREAMBLE_LENGTH],
             source,
             deferred,
         })

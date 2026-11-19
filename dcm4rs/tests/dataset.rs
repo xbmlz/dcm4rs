@@ -389,3 +389,45 @@ fn group_dataset_selects_one_group() {
     group.set_string(tag(0x0010, 0x0040), Vr::Cs, "M");
     assert_eq!(set.len(), 3);
 }
+
+#[test]
+fn formatted_lines_describe_each_element() {
+    let mut item = DataSet::new();
+    item.set_string(tag(0x0008, 0x1155), Vr::Ui, "1.2.3");
+    let mut set = DataSet::new();
+    set.set_string(tag(0x0008, 0x0016), Vr::Ui, "1.2.840.10008.5.1.4.1.1.2");
+    set.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
+    set.set(
+        tag(0x0011, 0x1001),
+        Vr::Un,
+        Value::from_bytes(vec![1, 2, 3]),
+    );
+    set.set_u16(tag(0x0028, 0x0010), 2);
+    set.set_sequence(tag(0x0008, 0x1115), vec![item]);
+
+    let lines: Vec<String> = set.formatted_lines().collect();
+    assert_eq!(lines.len(), 6);
+
+    // Tag order, with the items of a sequence right after their sequence element.
+    assert!(lines[0].starts_with("(0008,0016) SOP Class UID"));
+    assert!(lines[0].ends_with("UI: CT Image Storage"));
+    assert!(lines[1].starts_with("(0008,1115) Referenced Series Sequence"));
+    assert!(lines[1].ends_with("SQ: <Sequence, length 1>"));
+    assert!(lines[2].starts_with("(0008,1155) Referenced SOP Instance UID"));
+    assert!(lines[2].ends_with("UI: 1.2.3"));
+
+    // Text prints in quotes, private tags by that label, and numbers as written.
+    assert!(lines[3].starts_with("(0010,0010) Patient's Name"));
+    assert!(lines[3].ends_with("PN: 'Doe^John'"));
+    assert!(lines[4].starts_with("(0011,1001) Private tag data"));
+    assert!(lines[4].ends_with("UN: [1, 2, 3]"));
+    assert!(lines[5].starts_with("(0028,0010) Rows"));
+    assert!(lines[5].ends_with("US: 2"));
+
+    // The name column is the same width on every line, so the values line up.
+    let value_columns: Vec<usize> = lines
+        .iter()
+        .map(|line| line.find(": ").expect("a value follows the VR"))
+        .collect();
+    assert!(value_columns.iter().all(|column| *column >= 47));
+}

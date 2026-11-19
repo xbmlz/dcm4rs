@@ -5,13 +5,15 @@
 //! malformed input.
 //!
 //! Divergences from pydicom asserted below and listed in the README: an implicit VR group
-//! length element becomes `UN` instead of `UL` (the dictionary has no such entries), an
+//! length element becomes `UN` instead of `UL` (the dictionary has no such entries), and an
 //! undefined length on `OB`/`OW` is read as fragments wherever it appears (pydicom only treats
-//! Pixel Data that way), and there is no `force`/deferred read.
+//! Pixel Data that way).
 
 mod common;
 
-use dcm4rs::{DataSet, Element, Endian, Error, ReadOptions, Tag, TransferSyntax, Value, Vr};
+use dcm4rs::{
+    DataSet, DicomFile, Element, Endian, Error, ReadOptions, Tag, TransferSyntax, Value, Vr,
+};
 
 use common::{
     delimiter_le, element_be, element_implicit, element_le, element_le_undefined, item_be, item_le,
@@ -824,4 +826,50 @@ fn element_equality_round_trips_through_bytes() {
     let set = read(&bytes, EXPLICIT_LE);
     assert_eq!(set.get(tag(0x0010, 0x0010)).unwrap(), &element);
     assert_eq!(Tag::parse("0010,0010").unwrap(), tag(0x0010, 0x0010));
+}
+
+/// pydicom's `dcmread(..., force=True)` reads a data set that carries no Part 10 wrapper,
+/// assuming a transfer syntax because a bare data set has none to declare.
+#[test]
+fn a_bare_data_set_reads_without_a_preamble() {
+    let mut bytes = element_le("PN", tag(0x0010, 0x0010), b"Doe^John");
+    bytes.extend_from_slice(&element_le("UI", tag(0x0008, 0x0016), b"1.2.3 "));
+
+    assert!(matches!(
+        DicomFile::read(&bytes),
+        Err(Error::InvalidData { .. })
+    ));
+
+    let options = ReadOptions {
+        no_preamble: true,
+        assumed_syntax: EXPLICIT_LE,
+        ..ReadOptions::default()
+    };
+    let file = DicomFile::read_with_options(&bytes, options).expect("bare read");
+    assert_eq!(
+        file.dataset.string(tag(0x0010, 0x0010)).unwrap(),
+        "Doe^John"
+    );
+    assert_eq!(file.transfer_syntax().unwrap(), EXPLICIT_LE);
+
+    // Encoding the file again writes the wrapper the stream was missing.
+    let written = file.write().unwrap();
+    assert_eq!(&written[128..132], b"DICM");
+    let round = DicomFile::read(&written).expect("part 10 read");
+    assert_eq!(
+        round.dataset.string(tag(0x0010, 0x0010)).unwrap(),
+        "Doe^John"
+    );
+}
+
+#[test]
+fn reading_from_a_stream_matches_reading_bytes() {
+    let mut set = DataSet::new();
+    set.set_string(tag(0x0008, 0x0016), Vr::Ui, "1.2.840.10008.5.1.4.1.1.2");
+    set.set_string(tag(0x0008, 0x0018), Vr::Ui, "1.2.3.4.5");
+    set.set_string(tag(0x0010, 0x0010), Vr::Pn, "Doe^John");
+    let bytes = DicomFile::new(set, EXPLICIT_LE).unwrap().write().unwrap();
+
+    let streamed = DicomFile::read_from(std::io::Cursor::new(bytes.clone())).expect("stream read");
+    assert_eq!(streamed, DicomFile::read(&bytes).unwrap());
 }
