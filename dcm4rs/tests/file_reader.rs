@@ -125,6 +125,7 @@ fn lenient_reading_keeps_the_bytes_before_the_delimiter() {
 
     let lenient = ReadOptions {
         lenient_undefined_length: true,
+        ..ReadOptions::default()
     };
     let set = DataSet::read_with_options(&bytes, EXPLICIT_LE, lenient).expect("lenient read");
     assert_eq!(set.string(tag(0x0010, 0x0010)).unwrap(), "Doe^John");

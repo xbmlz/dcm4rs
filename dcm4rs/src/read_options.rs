@@ -16,4 +16,13 @@ pub struct ReadOptions {
     /// bound the encoding gives. The bytes before the delimiter become the value, which is what
     /// pydicom's `read_undefined_length_value` does.
     pub lenient_undefined_length: bool,
+
+    /// Leave the values of elements at least this many bytes long out of the data set.
+    ///
+    /// Zero, the default, reads every value. A larger value matches pydicom's `defer_size`: the
+    /// element is recorded by [`crate::DicomFile::deferred_elements`] and its tag stays out of
+    /// the data set until [`crate::DicomFile::load_element`] reads it back from the file. Only a
+    /// source that can be read again — the bytes passed to `read`, or the path passed to
+    /// `read_file` — can defer.
+    pub defer_size: usize,
 }

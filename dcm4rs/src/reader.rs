@@ -19,6 +19,15 @@ const ITEM_DELIMITER: Tag = Tag::new(0xFFFE, 0xE00D);
 const SEQUENCE_DELIMITER: Tag = Tag::new(0xFFFE, 0xE0DD);
 const UNDEFINED_LENGTH: u32 = 0xFFFF_FFFF;
 
+/// An element whose value a read skipped because it reached `ReadOptions::defer_size`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeferredElement {
+    /// The tag of the element.
+    pub tag: Tag,
+    /// The byte length of the value that was left out.
+    pub length: usize,
+}
+
 /// Cursor over encoded bytes together with the syntax that governs their layout.
 pub(crate) struct Reader<'a> {
     data: &'a [u8],
@@ -35,6 +44,8 @@ pub(crate) struct Reader<'a> {
     options: ReadOptions,
     /// Duplicate tags seen so far, shared by the data set and the items it contains.
     duplicates: Vec<Tag>,
+    /// Elements whose values were skipped for reaching [`ReadOptions::defer_size`].
+    deferred: Vec<DeferredElement>,
 }
 
 impl<'a> Reader<'a> {
@@ -57,6 +68,7 @@ impl<'a> Reader<'a> {
             private_creators: HashMap::new(),
             options,
             duplicates: Vec::new(),
+            deferred: Vec::new(),
         }
     }
 
@@ -124,7 +136,16 @@ impl<'a> Reader<'a> {
                 break;
             }
             let element_offset = self.position;
-            let element = self.read_element()?;
+            let Some(element) = self.read_element()? else {
+                // A deferred value still has to end inside its container.
+                if self.position > end {
+                    return Err(Error::InvalidData {
+                        offset: element_offset,
+                        reason: "value runs past the end of its container",
+                    });
+                }
+                continue;
+            };
             self.remember_private_creator(&element);
             // The container's length bounds its elements, so a value that runs past `end` means
             // the stream is malformed. Without this check the value would silently consume the
@@ -154,7 +175,7 @@ impl<'a> Reader<'a> {
         Ok(set)
     }
 
-    pub(crate) fn read_element(&mut self) -> Result<Element> {
+    pub(crate) fn read_element(&mut self) -> Result<Option<Element>> {
         let tag = self.read_tag()?;
         if tag.group() == 0xFFFE {
             return Err(Error::InvalidData {
@@ -215,6 +236,14 @@ impl<'a> Reader<'a> {
                 return Err(Error::UnexpectedEof { offset });
             }
             Value::sequence(self.read_items_defined(end)?)
+        } else if self.should_defer(length as usize) {
+            // The value stays out of the data set; the file remembers how to read it back.
+            self.read_bytes(length as usize)?;
+            self.deferred.push(DeferredElement {
+                tag,
+                length: length as usize,
+            });
+            return Ok(None);
         } else {
             let bytes = self.read_bytes(length as usize)?.to_vec();
             if vr == Vr::Un {
@@ -222,7 +251,17 @@ impl<'a> Reader<'a> {
             }
             Value::from_bytes(bytes)
         };
-        Ok(Element::new(tag, vr, value))
+        Ok(Some(Element::new(tag, vr, value)))
+    }
+
+    /// Whether a value of `length` bytes is left out of the data set.
+    fn should_defer(&self, length: usize) -> bool {
+        self.options.defer_size > 0 && length >= self.options.defer_size
+    }
+
+    /// Elements whose values were skipped, in the order they were met.
+    pub(crate) fn deferred(&self) -> &[DeferredElement] {
+        &self.deferred
     }
 
     /// Body of one item whose length field has already been read. The item starts with the
@@ -515,6 +554,15 @@ impl DataSet {
         private_dictionary: Option<&PrivateDictionary>,
         options: ReadOptions,
     ) -> Result<Self> {
+        Ok(Self::read_inner_with_deferred(bytes, syntax, private_dictionary, options)?.0)
+    }
+
+    pub(crate) fn read_inner_with_deferred(
+        bytes: &[u8],
+        syntax: TransferSyntax,
+        private_dictionary: Option<&PrivateDictionary>,
+        options: ReadOptions,
+    ) -> Result<(Self, Vec<crate::reader::DeferredElement>)> {
         if syntax == TransferSyntax::DeflatedExplicitVrLittleEndian {
             let mut decoder = flate2::read::DeflateDecoder::new(bytes);
             let mut inflated = Vec::new();
@@ -530,9 +578,13 @@ impl DataSet {
                 private_dictionary,
                 options,
             );
-            return reader.read_data_set(inflated.len(), false);
+            let set = reader.read_data_set(inflated.len(), false)?;
+            let deferred = reader.deferred().to_vec();
+            return Ok((set, deferred));
         }
         let mut reader = Reader::new_with(bytes, syntax, private_dictionary, options);
-        reader.read_data_set(bytes.len(), false)
+        let set = reader.read_data_set(bytes.len(), false)?;
+        let deferred = reader.deferred().to_vec();
+        Ok((set, deferred))
     }
 }

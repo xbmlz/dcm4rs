@@ -54,11 +54,7 @@ fn file(mut dataset: DataSet, uid: &str) -> DicomFile {
     let mut meta = DataSet::new();
     let _ = meta.set(tags::TRANSFER_SYNTAX_UID, Vr::Ui, Value::from_str(uid));
     dataset.set_endian(dcm4rs::Endian::Little);
-    DicomFile {
-        meta,
-        dataset,
-        preamble: [0u8; 128],
-    }
+    DicomFile::from_parts(meta, dataset, [0u8; 128])
 }
 
 /// Encode a literal PackBits run of at most 128 bytes.
@@ -771,4 +767,135 @@ fn decode_pixel_data_decodes_every_frame() {
         file.decode_pixel_data().unwrap(),
         vec![vec![0x7F], vec![0x7F]]
     );
+}
+
+#[test]
+fn rle_compression_round_trips_the_stored_pixels() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![1, 2, 3, 4]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_rle().expect("compress");
+    assert_eq!(file.transfer_syntax().expect("syntax").uid(), RLE_UID);
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn rle_compression_survives_a_write_and_read_back() {
+    let mut set = pixel_set(2, 2, 1, 16, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ow,
+        Value::from_u16s(&[10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+    file.compress_rle().expect("compress");
+
+    let bytes = file.write().expect("bytes");
+    let read = DicomFile::read(&bytes).expect("read");
+    assert_eq!(read.transfer_syntax().expect("syntax").uid(), RLE_UID);
+    assert_eq!(
+        read.decode_frame(0).expect("frame"),
+        Value::from_u16s(&[10, 20, 30, 40]).as_bytes().unwrap()
+    );
+}
+
+#[test]
+fn compressing_an_encapsulated_file_is_refused() {
+    let mut set = pixel_set(1, 1, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::Fragments(vec![Vec::new(), rle_frame(&[literal(&[0x7F])])]),
+    );
+    let mut file = file(set, RLE_UID);
+    assert!(matches!(
+        file.compress_rle(),
+        Err(Error::InvalidPixelData(_))
+    ));
+}
+
+#[cfg(feature = "pixel-jpeg")]
+#[test]
+fn jpeg_compression_writes_baseline_and_decodes_back() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jpeg(100).expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.50"
+    );
+    let decoded = file.decode_frame(0).expect("frame");
+    assert_eq!(decoded.len(), 4);
+    // Lossy: close at quality 100, not exact.
+    for (decoded, original) in decoded.iter().zip([10u8, 20, 30, 40]) {
+        assert!(decoded.abs_diff(original) <= 4, "{decoded} vs {original}");
+    }
+}
+
+#[cfg(feature = "pixel-jpegls")]
+#[test]
+fn jpegls_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jpegls().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.80"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+}
+
+#[cfg(feature = "pixel-j2k")]
+#[test]
+fn j2k_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_j2k().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.90"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+}
+
+#[cfg(feature = "pixel-jxl")]
+#[test]
+fn jxl_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jxl().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.110"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
 }

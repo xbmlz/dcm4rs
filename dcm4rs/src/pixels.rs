@@ -17,9 +17,15 @@ use std::fmt;
 
 use crate::dataset::DataSet;
 use crate::dictionary::tags;
+use crate::endian::Endian;
 use crate::error::{Error, Result};
 use crate::file::DicomFile;
 use crate::transfer_syntax::TransferSyntax;
+use crate::value::Value;
+use crate::vr::Vr;
+
+/// Transfer syntax UID of RLE Lossless, the one encoding this crate writes.
+const RLE_LOSSLESS: &str = "1.2.840.10008.1.2.5";
 
 #[cfg(feature = "pixel-j2k")]
 mod j2k;
@@ -444,6 +450,293 @@ impl DicomFile {
             .iter()
             .map(|frame| decode_frame_bytes(syntax, &descriptor, frame))
             .collect()
+    }
+
+    /// Replace native Pixel Data with RLE Lossless encapsulated data.
+    ///
+    /// Every frame is encoded and the transfer syntax in the file meta information becomes RLE
+    /// Lossless. An already encapsulated file is refused, because the frames would have to be
+    /// decoded and re-encoded and this crate does not re-encode every codec it can decode.
+    pub fn compress_rle(&mut self) -> Result<()> {
+        let descriptor = self.dataset.pixel_descriptor()?;
+        let syntax = self.transfer_syntax()?;
+        if syntax.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            encoded.push(rle::encode(frame, &descriptor)?);
+        }
+        self.set_encapsulated(encoded, RLE_LOSSLESS)
+    }
+
+    /// Store `frames` as encapsulated Pixel Data and switch the transfer syntax to `uid`.
+    fn set_encapsulated(&mut self, frames: Vec<Vec<u8>>, uid: &str) -> Result<()> {
+        let value = crate::encaps::encapsulate(&frames, 1, true)?;
+        // Encapsulated Pixel Data is kept as its fragments, so the encapsulated value is split
+        // back into the items it is made of.
+        let fragments: Vec<Vec<u8>> = crate::encaps::generate_fragments(&value, Endian::Little)?
+            .into_iter()
+            .map(|fragment| fragment.to_vec())
+            .collect();
+        self.dataset
+            .set(tags::PIXEL_DATA, Vr::Ob, Value::Fragments(fragments));
+        self.meta
+            .set(tags::TRANSFER_SYNTAX_UID, Vr::Ui, Value::from_str(uid));
+        Ok(())
+    }
+}
+
+#[cfg(feature = "pixel-jpeg")]
+impl DicomFile {
+    /// Replace native 8-bit Pixel Data with baseline JPEG.
+    ///
+    /// `quality` is the encoder's 1-100 scale. A colour frame is written as YCbCr, so its
+    /// photometric interpretation becomes `YBR_FULL_422`.
+    pub fn compress_jpeg(&mut self, quality: u8) -> Result<()> {
+        use jpeg_encoder::{ColorType, Encoder};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if descriptor.bits_allocated != 8 {
+            return Err(Error::InvalidPixelData(
+                "baseline JPEG writes 8-bit samples only".to_owned(),
+            ));
+        }
+        let colour = descriptor.samples_per_pixel == 3;
+        let color = match descriptor.samples_per_pixel {
+            1 => ColorType::Luma,
+            3 => ColorType::Rgb,
+            samples => {
+                return Err(Error::InvalidPixelData(format!(
+                    "baseline JPEG needs one or three samples, this image has {samples}"
+                )))
+            }
+        };
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let mut out = Vec::new();
+            Encoder::new(&mut out, quality)
+                .encode(frame, descriptor.columns, descriptor.rows, color)
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG encoder: {err}")))?;
+            encoded.push(out);
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.50")?;
+        if colour {
+            self.dataset
+                .set_string(tags::PHOTOMETRIC_INTERPRETATION, Vr::Cs, "YBR_FULL_422");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "pixel-jpegls")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG-LS Lossless.
+    pub fn compress_jpegls(&mut self) -> Result<()> {
+        use charls::{CharLS, FrameInfo, InterleaveMode};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.bits_allocated, 8 | 16) {
+            return Err(Error::InvalidPixelData(
+                "JPEG-LS writes 8- and 16-bit samples".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.samples_per_pixel, 1 | 3) {
+            return Err(Error::InvalidPixelData(
+                "JPEG-LS needs one or three samples".to_owned(),
+            ));
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let mut encoder = CharLS::default();
+            if descriptor.samples_per_pixel > 1 {
+                encoder
+                    .set_interleave_mode(InterleaveMode::Sample)
+                    .map_err(|err| Error::InvalidPixelData(format!("JPEG-LS encoder: {err}")))?;
+            }
+            let compressed = encoder
+                .encode(
+                    FrameInfo {
+                        width: u32::from(descriptor.columns),
+                        height: u32::from(descriptor.rows),
+                        bits_per_sample: i32::from(descriptor.bits_allocated),
+                        component_count: i32::from(descriptor.samples_per_pixel),
+                    },
+                    0,
+                    frame,
+                )
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG-LS encoder: {err}")))?;
+            encoded.push(compressed);
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.80")
+    }
+}
+
+#[cfg(feature = "pixel-j2k")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG 2000 Lossless.
+    ///
+    /// 8- and 16-bit samples are written as one codestream per frame; the reversible 5-3
+    /// transform keeps the samples exact.
+    pub fn compress_j2k(&mut self) -> Result<()> {
+        use jpeg2k::{ColorSpace, CoreImage, CoreImageComp, EncodeParameters, Image};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.bits_allocated, 8 | 16) {
+            return Err(Error::InvalidPixelData(
+                "JPEG 2000 writes 8- and 16-bit samples".to_owned(),
+            ));
+        }
+        let samples = usize::from(descriptor.samples_per_pixel);
+        let bytes_per_sample = descriptor.bytes_per_sample();
+        let pixel_count = usize::from(descriptor.rows) * usize::from(descriptor.columns);
+        let signed = descriptor.pixel_representation == PixelRepresentation::Signed;
+        let planar = descriptor.planar_configuration == PlanarConfiguration::Planar;
+        // A DWT cannot split a small image as many times as the default six resolutions allow.
+        let mut resolutions = 1u32;
+        while resolutions < 6
+            && (1u32 << resolutions) <= u32::from(descriptor.columns.min(descriptor.rows))
+        {
+            resolutions += 1;
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let comps = (0..samples)
+                .map(|sample| {
+                    let data = (0..pixel_count)
+                        .map(|pixel| {
+                            let index = if planar {
+                                (sample * pixel_count + pixel) * bytes_per_sample
+                            } else {
+                                (pixel * samples + sample) * bytes_per_sample
+                            };
+                            match (bytes_per_sample, signed) {
+                                (1, false) => i32::from(frame[index]),
+                                (1, true) => i32::from(frame[index] as i8),
+                                (_, false) => {
+                                    i32::from(u16::from_le_bytes([frame[index], frame[index + 1]]))
+                                }
+                                (_, true) => {
+                                    i32::from(i16::from_le_bytes([frame[index], frame[index + 1]]))
+                                }
+                            }
+                        })
+                        .collect();
+                    CoreImageComp {
+                        dx: 1,
+                        dy: 1,
+                        w: u32::from(descriptor.columns),
+                        h: u32::from(descriptor.rows),
+                        x0: 0,
+                        y0: 0,
+                        prec: u32::from(descriptor.bits_stored),
+                        bpp: u32::from(descriptor.bits_allocated),
+                        sgnd: u32::from(signed),
+                        resno_decoded: 0,
+                        factor: 0,
+                        alpha: 0,
+                        data,
+                    }
+                })
+                .collect();
+            let image = Image::from_core_image(CoreImage {
+                x0: 0,
+                y0: 0,
+                x1: u32::from(descriptor.columns),
+                y1: u32::from(descriptor.rows),
+                numcomps: u32::from(descriptor.samples_per_pixel),
+                color_space: if samples >= 3 {
+                    ColorSpace::Srgb
+                } else {
+                    ColorSpace::Gray
+                },
+                comps,
+                icc_profile_buf: Vec::new(),
+                icc_profile_is_cielab: false,
+            });
+            encoded.push(
+                image
+                    .encode(EncodeParameters::new().num_resolutions(resolutions))
+                    .map_err(|err| Error::InvalidPixelData(format!("JPEG 2000 encoder: {err}")))?,
+            );
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.90")
+    }
+}
+
+#[cfg(feature = "pixel-jxl")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG XL Lossless.
+    ///
+    /// `zune-jpegxl` encodes 8- and 16-bit gray or colour frames losslessly and writes
+    /// the bare codestream the transfer syntax carries.
+    pub fn compress_jxl(&mut self) -> Result<()> {
+        use zune_core::bit_depth::BitDepth;
+        use zune_core::colorspace::ColorSpace;
+        use zune_core::options::EncoderOptions;
+        use zune_jpegxl::JxlSimpleEncoder;
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        let (space, depth) = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
+            (1, 8) => (ColorSpace::Luma, BitDepth::Eight),
+            (3, 8) => (ColorSpace::RGB, BitDepth::Eight),
+            (1, 16) => (ColorSpace::Luma, BitDepth::Sixteen),
+            (3, 16) => (ColorSpace::RGB, BitDepth::Sixteen),
+            (samples, bits) => {
+                return Err(Error::InvalidPixelData(format!(
+                    "JPEG XL writes 8- and 16-bit gray or colour, this image has {samples} \
+                     sample(s) of {bits} bits"
+                )))
+            }
+        };
+        let width = usize::from(descriptor.columns);
+        let height = usize::from(descriptor.rows);
+        let frame_len = width
+            * usize::from(descriptor.samples_per_pixel)
+            * height
+            * (usize::from(descriptor.bits_allocated) / 8);
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let samples = frame.get(..frame_len).ok_or_else(|| {
+                Error::InvalidPixelData(format!(
+                    "frame holds {} bytes, JPEG XL needs {frame_len}",
+                    frame.len()
+                ))
+            })?;
+            let mut codestream = Vec::new();
+            JxlSimpleEncoder::new(samples, EncoderOptions::new(width, height, space, depth))
+                .encode(&mut codestream)
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?;
+            encoded.push(codestream);
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.110")
     }
 }
 
