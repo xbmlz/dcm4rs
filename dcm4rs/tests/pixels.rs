@@ -3,7 +3,7 @@
 #[cfg(feature = "pixel-jpegls")]
 use charls::{CharLS, FrameInfo, InterleaveMode};
 use dcm4rs::dictionary::tags;
-use dcm4rs::{DataSet, DicomFile, Error, PhotometricInterpretation, Value, Vr};
+use dcm4rs::{DataSet, DicomFile, Error, PhotometricInterpretation, ReadOptions, Value, Vr};
 #[cfg(feature = "pixel-jpeg")]
 use jpeg_encoder::{ColorType, Encoder};
 
@@ -981,4 +981,91 @@ fn jxl_multi_frame_round_trips_exactly() {
     file.compress_jxl().expect("compress");
     assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
     assert_eq!(file.decode_frame(1).expect("frame"), vec![50, 60, 70, 80]);
+}
+
+/// A deferred native frame is read from the source when it is asked for.
+#[test]
+fn deferred_pixel_data_streams_frames() {
+    let samples: Vec<u8> = (1..=48).map(|value| value * 2).collect();
+    let mut set = pixel_set(4, 4, 1, 8, 3, "MONOCHROME2");
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(samples.clone()));
+    let bytes = file(set, EXPLICIT_LE_UID).write().unwrap();
+
+    let options = ReadOptions {
+        defer_size: 16,
+        ..ReadOptions::default()
+    };
+    let deferred = DicomFile::read_with_options(&bytes, options).unwrap();
+    assert!(deferred.is_deferred(tags::PIXEL_DATA));
+    assert!(deferred.dataset.get(tags::PIXEL_DATA).is_none());
+    assert!(deferred.pixel_descriptor().is_ok());
+
+    let streamed: Vec<Vec<u8>> = deferred
+        .iter_frames()
+        .unwrap()
+        .map(|frame| frame.unwrap())
+        .collect();
+    let plain = DicomFile::read(&bytes).unwrap();
+    assert_eq!(streamed, plain.decode_pixel_data().unwrap());
+
+    // The same, with the source being a file on disk rather than bytes in memory.
+    let mut path = std::env::temp_dir();
+    path.push(format!("dcm4rs-stream-{}.dcm", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let result = (|| {
+        let deferred = DicomFile::read_file_with_options(&path, options)?;
+        assert!(deferred.is_deferred(tags::PIXEL_DATA));
+        let streamed: Vec<Vec<u8>> = deferred
+            .iter_frames()?
+            .map(|frame| frame.unwrap())
+            .collect();
+        assert_eq!(streamed, plain.decode_pixel_data().unwrap());
+        Ok::<(), Error>(())
+    })();
+    std::fs::remove_file(&path).unwrap();
+    result.unwrap();
+}
+
+/// A file that claims more frames than it stores is an error, not a short read.
+#[test]
+fn deferred_frames_must_match_the_frame_count() {
+    let mut set = pixel_set(4, 4, 1, 8, 3, "MONOCHROME2");
+    // Two frames of samples for a file that says it has three.
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(vec![7u8; 32]));
+    let bytes = file(set, EXPLICIT_LE_UID).write().unwrap();
+
+    let options = ReadOptions {
+        defer_size: 16,
+        ..ReadOptions::default()
+    };
+    let deferred = DicomFile::read_with_options(&bytes, options).unwrap();
+    assert!(deferred.is_deferred(tags::PIXEL_DATA));
+    let error = deferred.iter_frames().err().expect("short pixel data");
+    assert!(
+        error.to_string().contains("32 bytes, 48 required"),
+        "{error}"
+    );
+}
+
+/// A source that is gone when a frame is asked for reports it instead of iterating on.
+#[test]
+fn a_gone_source_fails_the_next_frame() {
+    let mut set = pixel_set(4, 4, 1, 8, 2, "MONOCHROME2");
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(vec![9u8; 32]));
+    let bytes = file(set, EXPLICIT_LE_UID).write().unwrap();
+
+    let mut path = std::env::temp_dir();
+    path.push(format!("dcm4rs-gone-{}.dcm", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let options = ReadOptions {
+        defer_size: 16,
+        ..ReadOptions::default()
+    };
+    let deferred = DicomFile::read_file_with_options(&path, options).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    let mut frames = deferred.iter_frames().unwrap();
+    let first = frames.next().expect("one error");
+    assert!(first.is_err(), "{first:?}");
+    assert!(frames.next().is_none(), "iteration stops after the error");
 }

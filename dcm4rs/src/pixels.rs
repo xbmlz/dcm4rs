@@ -496,12 +496,25 @@ impl DicomFile {
     /// Decode frames one at a time.
     ///
     /// Only one decoded frame is held at a time, so a long multi-frame image never needs its
-    /// decoded form in memory all at once. The encoded frames of an encapsulated file are still
-    /// collected up front, because the Basic Offset Table has to be read to find their
-    /// boundaries; those are the compressed bytes, not the samples.
+    /// decoded form in memory all at once. When a read deferred Pixel Data, each frame is read
+    /// from the source as it is asked for, so the stored samples are never all in memory either;
+    /// [`ReadOptions::defer_size`] therefore suits the large multi-frame images best of all.
+    /// The encoded frames of an encapsulated file are still collected up front, because the
+    /// Basic Offset Table has to be read to find their boundaries; those are the compressed
+    /// bytes, not the samples.
     pub fn iter_frames(&self) -> Result<Frames<'_>> {
         let descriptor = self.pixel_descriptor()?;
         let syntax = self.transfer_syntax()?;
+        if !syntax.is_encapsulated() {
+            let length = self
+                .deferred_elements()
+                .iter()
+                .find(|element| element.tag == tags::PIXEL_DATA)
+                .map(|element| (element.offset, element.length));
+            if let Some((offset, length)) = length {
+                return self.stream_native_frames(descriptor, syntax, offset, length);
+            }
+        }
         let encoded = if syntax.is_encapsulated() {
             Encoded::Encapsulated(self.dataset.encapsulated_frames()?.into_iter())
         } else {
@@ -531,6 +544,38 @@ impl DicomFile {
         };
         Ok(Frames {
             encoded,
+            descriptor,
+            syntax,
+        })
+    }
+
+    /// Frames of a native Pixel Data a read left in the file: each is read from the source.
+    fn stream_native_frames<'a>(
+        &'a self,
+        descriptor: PixelDescriptor,
+        syntax: TransferSyntax,
+        offset: usize,
+        length: usize,
+    ) -> Result<Frames<'a>> {
+        let frame_size = descriptor.stored_frame_size();
+        if frame_size == 0 {
+            return Err(Error::InvalidPixelData("frame size is zero".to_owned()));
+        }
+        let expected = frame_size
+            .checked_mul(descriptor.number_of_frames as usize)
+            .ok_or_else(|| Error::InvalidPixelData("pixel data size overflows".to_owned()))?;
+        if length < expected {
+            return Err(Error::InvalidPixelData(format!(
+                "Pixel Data has {length} bytes, {expected} required for {} frame(s)",
+                descriptor.number_of_frames
+            )));
+        }
+        Ok(Frames {
+            encoded: Encoded::NativeSource {
+                file: self,
+                offset,
+                remaining: descriptor.number_of_frames as usize,
+            },
             descriptor,
             syntax,
         })
@@ -717,6 +762,12 @@ pub struct Frames<'a> {
 enum Encoded<'a> {
     /// Native Pixel Data: slices of the stored bytes, decoded on the way out.
     Native(&'a [u8]),
+    /// Native Pixel Data the read left in the file: each frame is read from the source.
+    NativeSource {
+        file: &'a DicomFile,
+        offset: usize,
+        remaining: usize,
+    },
     /// Encapsulated Pixel Data: one compressed frame at a time.
     Encapsulated(std::vec::IntoIter<Vec<u8>>),
 }
@@ -734,6 +785,26 @@ impl Iterator for Frames<'_> {
                 let (frame, rest) = bytes.split_at(frame_size.min(bytes.len()));
                 *bytes = rest;
                 Some(decode_frame_bytes(self.syntax, &self.descriptor, frame))
+            }
+            Encoded::NativeSource {
+                file,
+                offset,
+                remaining,
+            } => {
+                if *remaining == 0 {
+                    return None;
+                }
+                *remaining -= 1;
+                let frame_size = self.descriptor.stored_frame_size();
+                let frame = match file.source_range(*offset, frame_size) {
+                    Ok(frame) => frame,
+                    Err(err) => {
+                        *remaining = 0;
+                        return Some(Err(err));
+                    }
+                };
+                *offset += frame_size;
+                Some(decode_frame_bytes(self.syntax, &self.descriptor, &frame))
             }
             Encoded::Encapsulated(frames) => {
                 let frame = frames.next()?;
