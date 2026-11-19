@@ -431,3 +431,77 @@ fn formatted_lines_describe_each_element() {
         .collect();
     assert!(value_columns.iter().all(|column| *column >= 47));
 }
+
+/// The value form of one element, with the tag's name ignored.
+fn representation_line(vr: Vr, value: Value) -> String {
+    let mut set = DataSet::new();
+    set.set(Tag::new(0x7777, 0x0001), vr, value);
+    let line = set.formatted_lines().next().expect("one element");
+    line
+}
+
+#[test]
+fn formatted_lines_cover_the_value_forms() {
+    // Binary numeric VRs decode with the data set's byte order.
+    assert!(representation_line(Vr::Ss, Value::from_i16s(&[-5])).ends_with("SS: -5"));
+    assert!(representation_line(Vr::Ul, Value::from_u32s(&[7])).ends_with("UL: 7"));
+    assert!(representation_line(Vr::Sl, Value::from_i32s(&[-9])).ends_with("SL: -9"));
+    assert!(representation_line(Vr::Uv, Value::from_u64s(&[11])).ends_with("UV: 11"));
+    assert!(representation_line(Vr::Sv, Value::from_i64s(&[-13])).ends_with("SV: -13"));
+    assert!(representation_line(Vr::Fl, Value::from_f32s(&[1.5])).ends_with("FL: 1.5"));
+    assert!(representation_line(Vr::Fd, Value::from_f64s(&[2.5])).ends_with("FD: 2.5"));
+    assert!(
+        representation_line(Vr::At, Value::from_bytes(vec![0x10, 0x00, 0x10, 0x00]))
+            .ends_with("AT: (0010,0010)")
+    );
+    assert!(representation_line(Vr::Us, Value::from_u16s(&[1, 2])).ends_with("US: [1, 2]"));
+
+    // Numeric text prints as written, one value or several.
+    assert!(
+        representation_line(Vr::Ds, Value::from_strings(&["1.5", "2.5"]))
+            .ends_with("DS: [1.5, 2.5]")
+    );
+    assert!(representation_line(Vr::Is, Value::from_strings(&["42"])).ends_with("IS: 42"));
+
+    // Byte values print as slices, or as a count when they are long.
+    assert!(
+        representation_line(Vr::Ob, Value::from_bytes(vec![1, 2, 3])).ends_with("OB: [1, 2, 3]")
+    );
+    assert!(
+        representation_line(Vr::Ob, Value::from_bytes(vec![0u8; 200]))
+            .ends_with("OB: Array of 200 elements")
+    );
+    assert!(
+        representation_line(Vr::Ob, Value::Fragments(vec![vec![0; 4], vec![1, 2, 3]]))
+            .ends_with("OB: <2 fragments>")
+    );
+    assert!(
+        representation_line(Vr::Ob, Value::Fragments(vec![vec![0u8; 200]]))
+            .ends_with("OB: Array of 200 elements")
+    );
+
+    // Long text and many values are summarized like pydicom does.
+    assert!(
+        representation_line(Vr::Ut, Value::from_str(&"a".repeat(130)))
+            .ends_with("UT: Array of 130 elements")
+    );
+    let many = vec!["a"; 129].join("\\");
+    assert!(
+        representation_line(Vr::Lo, Value::from_str(&many)).ends_with("LO: Array of 129 elements")
+    );
+    let many_values: Vec<u16> = (0..129).collect();
+    assert!(representation_line(Vr::Us, Value::from_u16s(&many_values))
+        .ends_with("US: Array of 129 elements"));
+
+    // An empty value prints nothing after the VR.
+    assert!(representation_line(Vr::Cs, Value::empty()).ends_with("CS: "));
+
+    // A tag no registry knows is labelled as such.
+    let mut set = DataSet::new();
+    set.set(Tag::new(0x1234, 0x5678), Vr::Lo, Value::from_str("x"));
+    assert!(set
+        .formatted_lines()
+        .next()
+        .unwrap()
+        .contains("Unknown Tag & Data"));
+}
