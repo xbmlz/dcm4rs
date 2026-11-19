@@ -1,0 +1,13 @@
+# Patch coverage follows the project coverage, as Codecov's default does, but a percentage point
+# of slack keeps a rounding difference (a single line on a several-hundred-line diff) from failing
+# the build. The colour module landed at 80.70% against an 80.71% target.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
