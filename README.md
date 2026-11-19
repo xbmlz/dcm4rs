@@ -125,6 +125,19 @@ let pixels = file.decode_frame(0).unwrap();
 println!("{}x{}, {} bytes", descriptor.columns, descriptor.rows, pixels.len());
 ```
 
+### Colour
+
+`decode_rgb_frame` decodes a frame and returns displayable RGB: a `PALETTE COLOR` image is mapped
+through its colour lookup table, `YBR_FULL`, `YBR_FULL_422` and `YBR_PARTIAL_422` are converted,
+and a monochrome frame comes back as the samples it stores. The pieces are public on their own
+too: `convert_color_space`, `expand_ybr422`, `PaletteColorLut` and, for one-bit values such as
+Overlay Data, `unpack_bits` and `pack_bits`.
+
+```rust
+let rgb = file.decode_rgb_frame(0).unwrap();
+let mapped = file.apply_color_lut(0).unwrap();
+```
+
 ### Decompressing
 
 RLE Lossless, JPEG Lossless, 8-bit and 12-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are
@@ -151,6 +164,14 @@ replace the frames with encapsulated data and switch the transfer syntax. Baseli
 | `compress_jpegls` | JPEG-LS Lossless |
 | `compress_j2k` | JPEG 2000 Lossless |
 | `compress_jxl` | JPEG XL Lossless |
+
+### Writing native samples
+
+`decompress` decodes every encapsulated frame and rewrites the file as Explicit VR Little Endian.
+The JPEG, JPEG 2000 / HTJ2K and JPEG XL decoders hand back RGB, so a colour image they produced
+becomes `RGB` with an interleaved planar configuration; RLE Lossless keeps the coded samples and
+so keeps its photometric interpretation. `set_pixel_data` is the way back in: it stores native
+samples and keeps `Number of Frames` in step with their length.
 
 ## Data dictionary
 
@@ -200,7 +221,9 @@ data/       PS3.6 DocBook source (not committed)
 Implemented: data model and dictionary, Part 10 read/write, character set conversion, DEFLATE,
 private dictionary registration, private creator blocks, deferred reads, the DICOM JSON model
 (PS3.18 F.2), modality and VOI LUTs, media storage directories (the DICOMDIR), waveform decoding,
-typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), RLE Lossless, baseline
+typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), UID generation under the
+`2.25.` UUID root, colour conversion and palette colour lookup, pixel data write-back and
+decompression, RLE Lossless, baseline
 JPEG, JPEG-LS, JPEG 2000 and JPEG XL encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG /
 JPEG-LS / JPEG 2000 / JPEG XL decoding.
 
@@ -222,6 +245,9 @@ Where *dcm4rs* deliberately differs from *pydicom*, the difference is pinned by 
 | JSON encapsulated pixel data | `Error::UnsupportedPixelData` on write, because the fragments would come back as one opaque blob |
 | Deferred reads | the tag stays out of the data set until `load_element` re-reads it, rather than holding a placeholder whose value fetches on access |
 | DICOMDIR | the tree is rebuilt from the record flags, not from the byte offsets; writing recomputes the offsets from the record order |
+| `decompress` | the photometric interpretation becomes `RGB` when the codec handed back RGB, because the expanded chroma no longer matches `YBR_FULL_422`; *pydicom* leaves the attribute alone |
+| Colour conversion | eight-bit three-sample frames only; `YBR_ICT` and `YBR_RCT` need no conversion because the JPEG 2000 decoder already applies their inverse |
+| Generated UIDs | the `2.25.` UUID-derived root, which needs no registration, instead of *pydicom*'s `1.2.826.0.1.3680043.8.498.` prefix |
 
 ## License
 

@@ -1,8 +1,9 @@
 //! Ports of `pydicom/tests/test_uid.py`.
 //!
-//! Each case names the pydicom test it comes from. `TestGenerateUID` and
-//! `TestRegisterTransferSyntax` are absent: the first needs entropy and SHA-512 over the
-//! registry, the second a mutable registry, and neither exists here yet.
+//! Each case names the pydicom test it comes from. `TestGenerateUID` covers the `2.25.` form
+//! instead of pydicom's registered prefix, so the cases assert the shape rather than the digits.
+//! `TestRegisterTransferSyntax` is absent: it needs a mutable registry, which does not exist
+//! here.
 
 use dcm4rs::uid::is_valid;
 use dcm4rs::Uid;
@@ -236,4 +237,38 @@ fn equality_and_ordering_follow_the_text() {
     let mut uids = [uid(EXPLICIT_LITTLE), uid(IMPLICIT), uid(JPEG_BASELINE)];
     uids.sort();
     assert_eq!(uids[0], IMPLICIT);
+}
+
+/// pydicom: `test_generate_uid`, with the `2.25.` UUID root instead of pydicom's prefix.
+#[test]
+fn generated_uids_are_valid_and_unique() {
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..1000 {
+        let generated = Uid::generate().expect("valid generated UID");
+        assert!(generated.as_str().starts_with("2.25."));
+        assert!(generated.as_str().len() <= 64);
+        assert!(generated.is_private());
+        assert!(
+            seen.insert(generated.as_str().to_owned()),
+            "{generated} repeated"
+        );
+    }
+    assert!(dcm4rs::uid::generate_uid().unwrap().is_valid());
+}
+
+/// pydicom: `test_generate_uid_use_prefix`, including a prefix that leaves no room for digits.
+#[test]
+fn a_registered_prefix_can_be_used() {
+    let generated = Uid::generate_with_root("1.2.840.10008.9.1").unwrap();
+    assert!(generated.as_str().starts_with("1.2.840.10008.9.1."));
+    assert!(generated.as_str().len() <= 64);
+
+    // Sixty-two characters of prefix leave one digit, which is a valid UID.
+    let long_root = format!("1.{}", "2".repeat(56));
+    let generated = Uid::generate_with_root(&long_root).unwrap();
+    assert!(generated.as_str().len() <= 64);
+    assert!(generated.as_str().starts_with(&long_root));
+
+    assert!(Uid::generate_with_root("not a root").is_err());
+    assert!(Uid::generate_with_root("1..2").is_err());
 }

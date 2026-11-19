@@ -9,6 +9,9 @@
 //! (eight-bit baseline and progressive, and the 12-bit extended process), JPEG-LS, JPEG
 //! 2000/HTJ2K and JPEG XL are feature-gated additions.
 //!
+//! [`color`] converts YBR to RGB, applies palette colour lookup tables and packs bits, and
+//! [`DicomFile::decompress`] rewrites an encapsulated file as native samples.
+//!
 //! MPEG video is not decoded: [`DataSet::encapsulated_frames`] returns its frames as the
 //! compressed bitstreams they are, [`Error::UnsupportedPixelData`] when a pixel is asked for, and
 //! [`crate::mpeg`] reads the sequence header for the attributes a viewer needs.
@@ -27,6 +30,9 @@ use crate::vr::Vr;
 /// Transfer syntax UID of RLE Lossless, the one encoding this crate writes.
 const RLE_LOSSLESS: &str = "1.2.840.10008.1.2.5";
 
+/// Explicit VR Little Endian, the syntax [`DicomFile::decompress`] writes.
+const EXPLICIT_VR_LITTLE_ENDIAN: &str = "1.2.840.10008.1.2.1";
+
 #[cfg(feature = "pixel-j2k")]
 mod j2k;
 #[cfg(feature = "pixel-jpeg")]
@@ -38,6 +44,12 @@ mod jpegls;
 mod jxl;
 mod lut;
 mod rle;
+
+pub mod color;
+
+pub use color::{
+    convert_color_space, expand_ybr422, pack_bits, unpack_bits, ColorSpace, PaletteColorLut,
+};
 
 /// How a pixel sample is interpreted: unsigned or two's-complement signed
 /// (`(0028,0103) Pixel Representation`).
@@ -255,7 +267,11 @@ impl PixelDescriptor {
         usize::from(self.bits_allocated).div_ceil(8)
     }
 
-    /// Bytes in one native frame, including the packed layout when bits are allocated below 8.
+    /// Bytes in one frame once decoded, including the packed layout when bits are allocated
+    /// below 8.
+    ///
+    /// This is the size the codecs produce and the size after chroma expansion, so it is what
+    /// [`DicomFile::decode_frame`] returns and what a compression codec is checked against.
     pub fn frame_size(&self) -> usize {
         let pixels = usize::from(self.rows)
             * usize::from(self.columns)
@@ -265,6 +281,31 @@ impl PixelDescriptor {
         } else {
             pixels * self.bytes_per_sample()
         }
+    }
+
+    /// Bytes of one frame as Pixel Data stores them.
+    ///
+    /// The subsampled colour spaces store fewer samples than [`frame_size`](Self::frame_size)
+    /// counts: `YBR_FULL_422` and `YBR_PARTIAL_422` keep two pixels in three samples and
+    /// `YBR_PARTIAL_420` keeps four pixels in six, so a native frame is smaller than the decoded
+    /// one until the chroma is expanded.
+    pub fn stored_frame_size(&self) -> usize {
+        let pixels = usize::from(self.rows) * usize::from(self.columns);
+        if self.bits_allocated < 8 {
+            return (pixels * usize::from(self.samples_per_pixel)).div_ceil(8);
+        }
+        let samples = match self.photometric {
+            PhotometricInterpretation::YbrFull422 | PhotometricInterpretation::YbrPartial422
+                if self.samples_per_pixel == 3 =>
+            {
+                pixels * 2
+            }
+            PhotometricInterpretation::YbrPartial420 if self.samples_per_pixel == 3 => {
+                (pixels * 3).div_ceil(2)
+            }
+            _ => pixels * usize::from(self.samples_per_pixel),
+        };
+        samples * self.bytes_per_sample()
     }
 }
 
@@ -405,7 +446,7 @@ impl DicomFile {
                 "Pixel Data is not a byte value".to_owned(),
             ));
         };
-        let frame_size = descriptor.frame_size();
+        let frame_size = descriptor.stored_frame_size();
         if frame_size == 0 {
             return Err(Error::InvalidPixelData("frame size is zero".to_owned()));
         }
@@ -450,6 +491,139 @@ impl DicomFile {
             .iter()
             .map(|frame| decode_frame_bytes(syntax, &descriptor, frame))
             .collect()
+    }
+
+    /// Decode one frame and return it as RGB samples.
+    ///
+    /// A `PALETTE COLOR` frame is mapped through its colour lookup table and the `YBR_FULL`,
+    /// `YBR_FULL_422` and `YBR_PARTIAL_422` frames are converted, so the result is displayable
+    /// without further work. Monochrome frames come back as the samples they are, one value per
+    /// pixel; the JPEG 2000 colour transforms arrive as RGB from the decoder already.
+    pub fn decode_rgb_frame(&self, index: usize) -> Result<Vec<u8>> {
+        let descriptor = self.pixel_descriptor()?;
+        let frame = self.decode_frame(index)?;
+        match descriptor.photometric {
+            PhotometricInterpretation::Rgb => Ok(frame),
+            PhotometricInterpretation::PaletteColor => {
+                color::PaletteColorLut::from_dataset(&self.dataset)?
+                    .apply(&frame, descriptor.bits_allocated)
+            }
+            PhotometricInterpretation::YbrFull
+            | PhotometricInterpretation::YbrFull422
+            | PhotometricInterpretation::YbrPartial422 => {
+                color::convert_color_space(&frame, &descriptor, color::ColorSpace::Rgb)
+            }
+            _ => Ok(frame),
+        }
+    }
+
+    /// Map one `PALETTE COLOR` frame through its colour lookup table.
+    ///
+    /// The result has three samples per pixel, one or two bytes each as
+    /// [`PaletteColorLut::bits_per_entry`] says.
+    pub fn apply_color_lut(&self, index: usize) -> Result<Vec<u8>> {
+        let descriptor = self.pixel_descriptor()?;
+        if descriptor.photometric != PhotometricInterpretation::PaletteColor {
+            return Err(Error::InvalidPixelData(format!(
+                "Photometric Interpretation is {}, only PALETTE COLOR has a colour lookup table",
+                descriptor.photometric
+            )));
+        }
+        color::PaletteColorLut::from_dataset(&self.dataset)?
+            .apply(&self.decode_frame(index)?, descriptor.bits_allocated)
+    }
+
+    /// Replace native Pixel Data with samples laid out as the descriptor says.
+    ///
+    /// `Number of Frames` follows the length of `data`: it is written when the data holds more
+    /// than one frame and removed when it holds one. An encapsulated file is refused, because
+    /// its transfer syntax would no longer describe the bytes; use
+    /// [`decompress`](Self::decompress) to get from compressed frames to native samples.
+    pub fn set_pixel_data(&mut self, data: Vec<u8>) -> Result<()> {
+        let syntax = self.transfer_syntax()?;
+        if syntax.is_encapsulated() {
+            return Err(Error::InvalidPixelData(format!(
+                "{syntax} holds encapsulated Pixel Data; decompress it before setting native \
+                 samples"
+            )));
+        }
+        let descriptor = self.pixel_descriptor()?;
+        self.store_native_pixel_data(&descriptor, data)
+    }
+
+    /// Decode every frame into native samples and switch the file to Explicit VR Little Endian.
+    ///
+    /// The codecs that work in RGB hand back RGB, so a colour image compressed with them becomes
+    /// `RGB` with an interleaved planar configuration. RLE Lossless keeps the coded samples, so
+    /// it keeps its photometric interpretation. pydicom's `decompress` leaves the photometric
+    /// interpretation alone in both cases, which leaves the decoded data mislabelled.
+    pub fn decompress(&mut self) -> Result<()> {
+        let syntax = self.transfer_syntax()?;
+        if !syntax.is_encapsulated() {
+            return Err(Error::UnsupportedPixelData(format!(
+                "{syntax} is not encapsulated"
+            )));
+        }
+        let descriptor = self.pixel_descriptor()?;
+        let mut data = Vec::new();
+        for frame in self.decode_pixel_data()? {
+            data.extend_from_slice(&frame);
+        }
+        let keeps_samples = matches!(syntax, TransferSyntax::Encapsulated(RLE_LOSSLESS));
+        self.meta.set(
+            tags::TRANSFER_SYNTAX_UID,
+            Vr::Ui,
+            Value::from_str(EXPLICIT_VR_LITTLE_ENDIAN),
+        );
+        // The photometric interpretation has to move to RGB before the samples are stored: it
+        // decides how large a frame is, and the decoders expanded the chroma on the way out.
+        if !keeps_samples && descriptor.samples_per_pixel > 1 {
+            self.dataset.set(
+                tags::PHOTOMETRIC_INTERPRETATION,
+                Vr::Cs,
+                Value::from_str("RGB"),
+            );
+            self.dataset
+                .set(tags::PLANAR_CONFIGURATION, Vr::Us, Value::from_u16s(&[0]));
+        }
+        // The descriptor is read again: the frame size follows the photometric interpretation
+        // that was just updated.
+        let stored = self.pixel_descriptor()?;
+        self.store_native_pixel_data(&stored, data)?;
+        Ok(())
+    }
+
+    /// Store `data` as native Pixel Data, keeping the frame count in step with its length.
+    fn store_native_pixel_data(
+        &mut self,
+        descriptor: &PixelDescriptor,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        let frame_size = descriptor.stored_frame_size();
+        if frame_size == 0 || data.len() % frame_size != 0 {
+            return Err(Error::InvalidPixelData(format!(
+                "{} bytes do not divide into frames of {frame_size} bytes",
+                data.len()
+            )));
+        }
+        let frames = data.len() / frame_size;
+        let vr = if descriptor.bits_allocated > 8 {
+            Vr::Ow
+        } else {
+            Vr::Ob
+        };
+        self.dataset
+            .set(tags::PIXEL_DATA, vr, Value::from_bytes(data));
+        if frames > 1 {
+            self.dataset.set(
+                tags::NUMBER_OF_FRAMES,
+                Vr::Is,
+                Value::from_str(&frames.to_string()),
+            );
+        } else {
+            self.dataset.remove(tags::NUMBER_OF_FRAMES);
+        }
+        Ok(())
     }
 
     /// Replace native Pixel Data with RLE Lossless encapsulated data.

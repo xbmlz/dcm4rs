@@ -44,6 +44,21 @@ const EXPLICIT_VR_BIG_ENDIAN: &str = "1.2.840.10008.1.2.2";
 /// The root every DICOM-registered UID starts with.
 const DICOM_ROOT: &str = "1.2.840.10008.";
 
+/// The root of the UUID-derived UIDs of ISO/IEC 9834-8 Annex B, which PS3.5 B.2 lists.
+const UUID_ROOT: &str = "2.25";
+
+/// Generate a new UID under the UUID-derived root `2.25.`.
+///
+/// The decimal form of a 128-bit random number follows the root, so the result is 44 characters
+/// at most and needs no registered prefix. pydicom's `generate_uid` defaults to its own
+/// `1.2.826.0.1.3680043.8.498.` prefix; `2.25.` is used here because it is self-contained.
+///
+/// The number comes from the standard library's randomly seeded hashers: it is unpredictable
+/// and does not repeat, but it is not a cryptographic random source.
+pub fn generate_uid() -> Result<Uid> {
+    Uid::generate()
+}
+
 /// Whether `value` is a well-formed UID as PS3.5 6.2 defines it for VR `UI`.
 ///
 /// The value may be at most 64 characters drawn from the digits and the period, every component
@@ -129,6 +144,43 @@ impl Uid {
     /// Whether the UID is well-formed; always true for a [`Uid`] built by [`Uid::new`].
     pub fn is_valid(&self) -> bool {
         is_valid(&self.value)
+    }
+
+    /// Generate a new UID under the UUID-derived root `2.25.`, as [`generate_uid`] does.
+    pub fn generate() -> Result<Self> {
+        Self::generate_with_root(UUID_ROOT)
+    }
+
+    /// Generate a new UID under `root`, such as an organization's registered prefix.
+    ///
+    /// The root is written as the leading components without a trailing period. When the random
+    /// decimal does not fit in the 64 characters a UID allows, the low-order digits are kept,
+    /// because they carry the entropy.
+    pub fn generate_with_root(root: &str) -> Result<Self> {
+        let root = root.trim().trim_end_matches('.');
+        if !is_valid(&format!("{root}.0")) {
+            return Err(Error::InvalidUid(root.to_owned()));
+        }
+        let room = 64usize
+            .checked_sub(root.len() + 1)
+            .filter(|room| *room > 0)
+            .ok_or_else(|| Error::InvalidUid(root.to_owned()))?;
+        let random = random_u128().to_string();
+        let mut digits = if random.len() > room {
+            random[random.len() - room..].to_owned()
+        } else {
+            random
+        };
+        // A decimal component cannot start with a zero, so trimming can only shorten it.
+        let trimmed = digits.trim_start_matches('0');
+        if trimmed.len() != digits.len() {
+            digits = if trimmed.is_empty() {
+                "1".to_owned()
+            } else {
+                trimmed.to_owned()
+            };
+        }
+        Self::new(format!("{root}.{digits}"))
     }
 
     /// Whether this is a transfer syntax: a registered one, or a private UID whose encoding was
@@ -227,6 +279,22 @@ impl PartialEq<&str> for Uid {
     fn eq(&self, other: &&str) -> bool {
         self.value == *other
     }
+}
+
+/// 128 bits taken from the standard library's randomly seeded hashers.
+///
+/// `RandomState` seeds itself from the operating system once per thread, and every fresh state
+/// moves the per-thread counter on, so hashing fixed inputs with two of them yields a number
+/// that neither repeats nor can be guessed from the previous one.
+fn random_u128() -> u128 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut high = RandomState::new().build_hasher();
+    high.write_u64(0);
+    let mut low = RandomState::new().build_hasher();
+    low.write_u64(u64::from(std::process::id()));
+    (u128::from(high.finish()) << 64) | u128::from(low.finish())
 }
 
 /// Find the registry row for `value`.
