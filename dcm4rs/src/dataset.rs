@@ -498,11 +498,10 @@ fn binary_numbers(element: &Element, endian: Endian) -> Option<Vec<String>> {
 
 /// One value as it is, several as a Python-style list.
 fn bracketed(values: &[String]) -> String {
-    match values {
-        [] => String::new(),
-        [one] => one.clone(),
-        many => format!("[{}]", many.join(", ")),
+    if let [one] = values {
+        return one.clone();
     }
+    format!("[{}]", values.join(", "))
 }
 
 /// Text values in single quotes, several as a list of quoted values.

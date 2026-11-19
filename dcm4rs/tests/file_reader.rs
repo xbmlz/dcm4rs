@@ -873,3 +873,24 @@ fn reading_from_a_stream_matches_reading_bytes() {
     let streamed = DicomFile::read_from(std::io::Cursor::new(bytes.clone())).expect("stream read");
     assert_eq!(streamed, DicomFile::read(&bytes).unwrap());
 }
+
+/// A bare data set keeps its bytes, so a deferred value can be read back from them.
+#[test]
+fn a_bare_data_set_can_defer_values() {
+    let mut bytes = element_le("LO", tag(0x0010, 0x0020), b"PATIENT-12345");
+    bytes.extend_from_slice(&element_le("PN", tag(0x0010, 0x0010), b"Doe^John"));
+
+    let options = ReadOptions {
+        no_preamble: true,
+        assumed_syntax: EXPLICIT_LE,
+        defer_size: 4,
+        ..ReadOptions::default()
+    };
+    let mut file = DicomFile::read_with_options(&bytes, options).expect("bare read");
+    assert!(file.is_deferred(tag(0x0010, 0x0020)));
+
+    let element = file
+        .load_element(tag(0x0010, 0x0020))
+        .expect("deferred read");
+    assert_eq!(element.string().unwrap(), "PATIENT-12345");
+}

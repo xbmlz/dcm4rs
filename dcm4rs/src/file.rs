@@ -47,6 +47,8 @@ pub struct DicomFile {
     source: Option<Source>,
     /// Elements whose values a read left out, in stream order.
     deferred: Vec<DeferredElement>,
+    /// The options the file was read with, so a deferred value is read back the same way.
+    read_options: ReadOptions,
 }
 
 impl DicomFile {
@@ -134,6 +136,7 @@ impl DicomFile {
             preamble,
             source,
             deferred,
+            read_options: options,
         })
     }
 
@@ -166,6 +169,7 @@ impl DicomFile {
             preamble: [0u8; PREAMBLE_LENGTH],
             source,
             deferred,
+            read_options: options,
         })
     }
 
@@ -246,6 +250,7 @@ impl DicomFile {
             preamble: [0u8; PREAMBLE_LENGTH],
             source: None,
             deferred: Vec::new(),
+            read_options: ReadOptions::default(),
         })
     }
 
@@ -260,6 +265,7 @@ impl DicomFile {
             preamble,
             source: None,
             deferred: Vec::new(),
+            read_options: ReadOptions::default(),
         }
     }
 
@@ -283,7 +289,7 @@ impl DicomFile {
             return self.dataset.element(tag);
         }
         let bytes = self.source_bytes()?;
-        let fresh = Self::read_inner(&bytes, None, ReadOptions::default())?;
+        let fresh = Self::read_inner(&bytes, None, self.reload_options())?;
         let element = fresh.dataset.element(tag)?.clone();
         self.dataset.insert(element);
         self.deferred.retain(|deferred| deferred.tag != tag);
@@ -296,7 +302,7 @@ impl DicomFile {
             return Ok(0);
         }
         let bytes = self.source_bytes()?;
-        let fresh = Self::read_inner(&bytes, None, ReadOptions::default())?;
+        let fresh = Self::read_inner(&bytes, None, self.reload_options())?;
         let tags: Vec<Tag> = self.deferred.iter().map(|deferred| deferred.tag).collect();
         let mut loaded = 0;
         for tag in &tags {
@@ -308,6 +314,13 @@ impl DicomFile {
         self.deferred
             .retain(|deferred| !tags.contains(&deferred.tag));
         Ok(loaded)
+    }
+
+    /// The options for reading the source again: as before, but keeping every value this time.
+    fn reload_options(&self) -> ReadOptions {
+        let mut options = self.read_options;
+        options.defer_size = 0;
+        options
     }
 
     fn source_bytes(&self) -> Result<Vec<u8>> {
