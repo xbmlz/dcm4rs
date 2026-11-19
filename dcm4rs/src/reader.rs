@@ -26,6 +26,8 @@ pub struct DeferredElement {
     pub tag: Tag,
     /// The byte length of the value that was left out.
     pub length: usize,
+    /// Where the value starts, counted from the start of the bytes it was read from.
+    pub offset: usize,
 }
 
 /// Cursor over encoded bytes together with the syntax that governs their layout.
@@ -238,10 +240,12 @@ impl<'a> Reader<'a> {
             Value::sequence(self.read_items_defined(end)?)
         } else if self.should_defer(length as usize) {
             // The value stays out of the data set; the file remembers how to read it back.
+            let offset = self.position();
             self.read_bytes(length as usize)?;
             self.deferred.push(DeferredElement {
                 tag,
                 length: length as usize,
+                offset,
             });
             return Ok(None);
         } else {

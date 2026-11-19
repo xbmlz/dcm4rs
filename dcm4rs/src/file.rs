@@ -119,12 +119,16 @@ impl DicomFile {
         }
         let dataset_start = meta_start + reader.position();
         let syntax = transfer_syntax_from_meta(&meta)?;
-        let (dataset, deferred) = DataSet::read_inner_with_deferred(
+        let (dataset, mut deferred) = DataSet::read_inner_with_deferred(
             &bytes[dataset_start..],
             syntax,
             private_dictionary,
             options,
         )?;
+        // The reader counted from the start of the data set; the source is the whole file.
+        for element in &mut deferred {
+            element.offset += dataset_start;
+        }
         let source = if deferred.is_empty() {
             None
         } else {
@@ -321,6 +325,40 @@ impl DicomFile {
         let mut options = self.read_options;
         options.defer_size = 0;
         options
+    }
+
+    /// Read `length` bytes of the source starting at `offset`, for a value a read left out.
+    pub(crate) fn source_range(&self, offset: usize, length: usize) -> Result<Vec<u8>> {
+        let end = offset.checked_add(length).ok_or(Error::InvalidData {
+            offset,
+            reason: "the deferred value offset overflows",
+        })?;
+        match &self.source {
+            Some(Source::Bytes(bytes)) => {
+                if end > bytes.len() {
+                    return Err(Error::InvalidData {
+                        offset,
+                        reason: "the deferred value runs past the source",
+                    });
+                }
+                Ok(bytes[offset..end].to_vec())
+            }
+            Some(Source::Path(path)) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut file =
+                    std::fs::File::open(path).map_err(|err| Error::Io(err.to_string()))?;
+                file.seek(SeekFrom::Start(offset as u64))
+                    .map_err(|err| Error::Io(err.to_string()))?;
+                let mut buffer = vec![0; length];
+                file.read_exact(&mut buffer)
+                    .map_err(|err| Error::Io(err.to_string()))?;
+                Ok(buffer)
+            }
+            None => Err(Error::InvalidData {
+                offset,
+                reason: "the file of a deferred element is gone",
+            }),
+        }
     }
 
     fn source_bytes(&self) -> Result<Vec<u8>> {
