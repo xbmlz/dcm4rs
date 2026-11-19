@@ -3,10 +3,10 @@ members = ["dcm4rs", "cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
 
 [workspace.dependencies]
-dcm4rs = { path = "dcm4rs", version = "0.2.0" }
+dcm4rs = { path = "dcm4rs", version = "0.3.0" }
