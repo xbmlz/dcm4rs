@@ -453,21 +453,8 @@ impl DicomFile {
     /// and run for every frame.
     fn native_frame_bytes(&self, index: usize) -> Result<&[u8]> {
         let descriptor = self.dataset.pixel_descriptor()?;
-        let bytes = self
-            .dataset
-            .element(tags::PIXEL_DATA)?
-            .value
-            .as_bytes()
-            .unwrap_or_default();
+        let bytes = self.native_pixel_data()?;
         let frame_size = descriptor.stored_frame_size();
-        let expected = frame_size.saturating_mul(descriptor.number_of_frames as usize);
-        if bytes.len() < expected {
-            return Err(Error::InvalidPixelData(format!(
-                "Pixel Data has {} bytes, {expected} required for {} frame(s)",
-                bytes.len(),
-                descriptor.number_of_frames
-            )));
-        }
         let start = index * frame_size;
         bytes.get(start..start + frame_size).ok_or_else(|| {
             Error::InvalidPixelData(format!(
@@ -475,6 +462,28 @@ impl DicomFile {
                 descriptor.number_of_frames
             ))
         })
+    }
+
+    /// The native Pixel Data bytes, checked to hold the frames the descriptor names.
+    fn native_pixel_data(&self) -> Result<&[u8]> {
+        let descriptor = self.dataset.pixel_descriptor()?;
+        let bytes = self
+            .dataset
+            .element(tags::PIXEL_DATA)?
+            .value
+            .as_bytes()
+            .unwrap_or_default();
+        let expected = descriptor
+            .stored_frame_size()
+            .saturating_mul(descriptor.number_of_frames as usize);
+        if bytes.len() < expected {
+            return Err(Error::InvalidPixelData(format!(
+                "Pixel Data has {} bytes, {expected} required for {} frame(s)",
+                bytes.len(),
+                descriptor.number_of_frames
+            )));
+        }
+        Ok(&bytes[..expected])
     }
 
     /// Decode one frame (zero-based).
@@ -543,29 +552,7 @@ impl DicomFile {
         let encoded = if syntax.is_encapsulated() {
             Encoded::Encapsulated(self.dataset.encapsulated_frames()?.into_iter())
         } else {
-            let bytes = self
-                .dataset
-                .element(tags::PIXEL_DATA)?
-                .value
-                .as_bytes()
-                .ok_or_else(|| {
-                    Error::InvalidPixelData("Pixel Data is not a byte value".to_owned())
-                })?;
-            let frame_size = descriptor.stored_frame_size();
-            if frame_size == 0 {
-                return Err(Error::InvalidPixelData("frame size is zero".to_owned()));
-            }
-            let expected = frame_size
-                .checked_mul(descriptor.number_of_frames as usize)
-                .ok_or_else(|| Error::InvalidPixelData("pixel data size overflows".to_owned()))?;
-            if bytes.len() < expected {
-                return Err(Error::InvalidPixelData(format!(
-                    "Pixel Data has {} bytes, {expected} required for {} frame(s)",
-                    bytes.len(),
-                    descriptor.number_of_frames
-                )));
-            }
-            Encoded::Native(&bytes[..expected])
+            Encoded::Native(self.native_pixel_data()?)
         };
         Ok(Frames {
             encoded,
