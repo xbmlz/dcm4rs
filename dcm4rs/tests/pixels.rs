@@ -439,6 +439,57 @@ fn native_frames_split_by_size() {
     assert_eq!(file.decode_frame(1).unwrap(), vec![5, 6, 7, 8]);
 }
 
+#[test]
+fn iter_frames_decodes_native_frames_one_at_a_time() {
+    let mut set = pixel_set(2, 2, 1, 8, 2, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+    let file = file(set, EXPLICIT_LE_UID);
+    let frames: Vec<Vec<u8>> = file
+        .iter_frames()
+        .unwrap()
+        .map(|frame| frame.unwrap())
+        .collect();
+    assert_eq!(frames, vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]);
+    assert_eq!(file.iter_frames().unwrap().count(), 2);
+}
+
+#[test]
+fn iter_frames_decodes_encapsulated_frames() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![1, 2, 3, 4]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+    file.compress_rle().unwrap();
+    let frames: Vec<Vec<u8>> = file
+        .iter_frames()
+        .unwrap()
+        .map(|frame| frame.unwrap())
+        .collect();
+    assert_eq!(frames, vec![vec![1, 2, 3, 4]]);
+}
+
+#[test]
+fn iter_frames_reports_truncated_pixel_data() {
+    let mut set = pixel_set(2, 2, 1, 8, 2, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![1, 2, 3, 4]),
+    );
+    let file = file(set, EXPLICIT_LE_UID);
+    assert!(matches!(
+        file.iter_frames().err(),
+        Some(Error::InvalidPixelData(_))
+    ));
+}
+
 #[cfg(feature = "pixel-jpeg")]
 fn jpeg_frame(pixels: &[u8], width: u16, height: u16, color: ColorType) -> Vec<u8> {
     let mut out = Vec::new();

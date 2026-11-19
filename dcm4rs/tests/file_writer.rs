@@ -630,3 +630,20 @@ fn missing_files_report_io_errors() {
     path.push("dcm4rs-does-not-exist.dcm");
     assert!(matches!(DicomFile::read_file(&path), Err(Error::Io(_))));
 }
+
+#[test]
+fn write_file_round_trips_through_the_filesystem() {
+    let file = DicomFile::new(sample_dataset(), EXPLICIT_LE).unwrap();
+    let mut path = std::env::temp_dir();
+    path.push(format!("dcm4rs-write-file-{}.dcm", std::process::id()));
+
+    file.write_file(&path).unwrap();
+    let read = DicomFile::read_file(&path).unwrap();
+    // The read side keeps the UI padding the writer added, so compare the values.
+    assert_eq!(
+        read.dataset.string(tag(0x0010, 0x0010)).unwrap(),
+        "Doe^John"
+    );
+    assert_eq!(read.transfer_syntax().unwrap(), EXPLICIT_LE);
+    std::fs::remove_file(&path).unwrap();
+}

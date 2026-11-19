@@ -138,6 +138,12 @@ let rgb = file.decode_rgb_frame(0).unwrap();
 let mapped = file.apply_color_lut(0).unwrap();
 ```
 
+### Streaming
+
+`iter_frames` decodes one frame at a time, so a long multi-frame image never holds its decoded
+form in memory twice. `pixel_frames` still returns every encoded frame at once when that is what
+you want.
+
 ### Decompressing
 
 RLE Lossless, JPEG Lossless, 8-bit and 12-bit JPEG, JPEG-LS, JPEG 2000 / HTJ2K and JPEG XL are
@@ -223,7 +229,8 @@ private dictionary registration, private creator blocks, deferred reads, the DIC
 (PS3.18 F.2), modality and VOI LUTs, media storage directories (the DICOMDIR), waveform decoding,
 typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), UID generation under the
 `2.25.` UUID root, colour conversion and palette colour lookup, pixel data write-back and
-decompression, RLE Lossless, baseline
+decompression, dataset walking, private tag removal and group selection, `write_file`, lazy
+frame iteration, RLE Lossless, baseline
 JPEG, JPEG-LS, JPEG 2000 and JPEG XL encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG /
 JPEG-LS / JPEG 2000 / JPEG XL decoding.
 

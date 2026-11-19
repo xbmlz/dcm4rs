@@ -493,6 +493,49 @@ impl DicomFile {
             .collect()
     }
 
+    /// Decode frames one at a time.
+    ///
+    /// Only one decoded frame is held at a time, so a long multi-frame image never needs its
+    /// decoded form in memory all at once. The encoded frames of an encapsulated file are still
+    /// collected up front, because the Basic Offset Table has to be read to find their
+    /// boundaries; those are the compressed bytes, not the samples.
+    pub fn iter_frames(&self) -> Result<Frames<'_>> {
+        let descriptor = self.pixel_descriptor()?;
+        let syntax = self.transfer_syntax()?;
+        let encoded = if syntax.is_encapsulated() {
+            Encoded::Encapsulated(self.dataset.encapsulated_frames()?.into_iter())
+        } else {
+            let bytes = self
+                .dataset
+                .element(tags::PIXEL_DATA)?
+                .value
+                .as_bytes()
+                .ok_or_else(|| {
+                    Error::InvalidPixelData("Pixel Data is not a byte value".to_owned())
+                })?;
+            let frame_size = descriptor.stored_frame_size();
+            if frame_size == 0 {
+                return Err(Error::InvalidPixelData("frame size is zero".to_owned()));
+            }
+            let expected = frame_size
+                .checked_mul(descriptor.number_of_frames as usize)
+                .ok_or_else(|| Error::InvalidPixelData("pixel data size overflows".to_owned()))?;
+            if bytes.len() < expected {
+                return Err(Error::InvalidPixelData(format!(
+                    "Pixel Data has {} bytes, {expected} required for {} frame(s)",
+                    bytes.len(),
+                    descriptor.number_of_frames
+                )));
+            }
+            Encoded::Native(&bytes[..expected])
+        };
+        Ok(Frames {
+            encoded,
+            descriptor,
+            syntax,
+        })
+    }
+
     /// Decode one frame and return it as RGB samples.
     ///
     /// A `PALETTE COLOR` frame is mapped through its colour lookup table and the `YBR_FULL`,
@@ -661,6 +704,42 @@ impl DicomFile {
         self.meta
             .set(tags::TRANSFER_SYNTAX_UID, Vr::Ui, Value::from_str(uid));
         Ok(())
+    }
+}
+
+/// Iterator returned by [`DicomFile::iter_frames`].
+pub struct Frames<'a> {
+    encoded: Encoded<'a>,
+    descriptor: PixelDescriptor,
+    syntax: TransferSyntax,
+}
+
+enum Encoded<'a> {
+    /// Native Pixel Data: slices of the stored bytes, decoded on the way out.
+    Native(&'a [u8]),
+    /// Encapsulated Pixel Data: one compressed frame at a time.
+    Encapsulated(std::vec::IntoIter<Vec<u8>>),
+}
+
+impl Iterator for Frames<'_> {
+    type Item = Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.encoded {
+            Encoded::Native(bytes) => {
+                if bytes.is_empty() {
+                    return None;
+                }
+                let frame_size = self.descriptor.stored_frame_size();
+                let (frame, rest) = bytes.split_at(frame_size.min(bytes.len()));
+                *bytes = rest;
+                Some(decode_frame_bytes(self.syntax, &self.descriptor, frame))
+            }
+            Encoded::Encapsulated(frames) => {
+                let frame = frames.next()?;
+                Some(decode_frame_bytes(self.syntax, &self.descriptor, &frame))
+            }
+        }
     }
 }
 

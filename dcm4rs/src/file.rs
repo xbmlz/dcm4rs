@@ -286,6 +286,14 @@ impl DicomFile {
         out.extend_from_slice(&self.dataset.write(syntax)?);
         Ok(out)
     }
+
+    /// Write this file to `path`, creating or truncating it.
+    ///
+    /// The bytes are the same ones [`write`](Self::write) returns; this is the one-call form
+    /// pydicom's `save_as` provides for a path.
+    pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        std::fs::write(path, self.write()?).map_err(|err| Error::Io(err.to_string()))
+    }
 }
 
 /// Files are equal when their meta information and main data set are.
