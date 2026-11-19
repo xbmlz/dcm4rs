@@ -30,6 +30,49 @@ enum Source {
     Path(PathBuf),
 }
 
+/// Reads byte ranges of a file's source, keeping a file open between reads.
+pub(crate) enum SourceReader<'a> {
+    /// The bytes are already in memory.
+    Bytes(&'a [u8]),
+    /// The bytes are on disk; the path is opened on the first read and kept open.
+    Path(PathBuf, Option<std::fs::File>),
+}
+
+impl SourceReader<'_> {
+    /// Read `length` bytes starting at `offset`.
+    pub(crate) fn read_at(&mut self, offset: usize, length: usize) -> Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        match self {
+            Self::Bytes(bytes) => {
+                let end = offset.checked_add(length).ok_or(Error::InvalidData {
+                    offset,
+                    reason: "the deferred value offset overflows",
+                })?;
+                if end > bytes.len() {
+                    return Err(Error::InvalidData {
+                        offset,
+                        reason: "the deferred value runs past the source",
+                    });
+                }
+                Ok(bytes[offset..end].to_vec())
+            }
+            Self::Path(path, handle) => {
+                if handle.is_none() {
+                    *handle =
+                        Some(std::fs::File::open(path).map_err(|err| Error::Io(err.to_string()))?);
+                }
+                let file = handle.as_mut().expect("the file is open");
+                file.seek(SeekFrom::Start(offset as u64))
+                    .map_err(|err| Error::Io(err.to_string()))?;
+                let mut buffer = vec![0; length];
+                file.read_exact(&mut buffer)
+                    .map_err(|err| Error::Io(err.to_string()))?;
+                Ok(buffer)
+            }
+        }
+    }
+}
+
 /// A DICOM Part 10 file: the file meta information plus the main data set.
 #[derive(Clone, Debug)]
 pub struct DicomFile {
@@ -327,35 +370,13 @@ impl DicomFile {
         options
     }
 
-    /// Read `length` bytes of the source starting at `offset`, for a value a read left out.
-    pub(crate) fn source_range(&self, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let end = offset.checked_add(length).ok_or(Error::InvalidData {
-            offset,
-            reason: "the deferred value offset overflows",
-        })?;
+    /// A reader over this file's source, for the values a read left out.
+    pub(crate) fn source_reader(&self) -> Result<SourceReader<'_>> {
         match &self.source {
-            Some(Source::Bytes(bytes)) => {
-                if end > bytes.len() {
-                    return Err(Error::InvalidData {
-                        offset,
-                        reason: "the deferred value runs past the source",
-                    });
-                }
-                Ok(bytes[offset..end].to_vec())
-            }
-            Some(Source::Path(path)) => {
-                use std::io::{Read, Seek, SeekFrom};
-                let mut file =
-                    std::fs::File::open(path).map_err(|err| Error::Io(err.to_string()))?;
-                file.seek(SeekFrom::Start(offset as u64))
-                    .map_err(|err| Error::Io(err.to_string()))?;
-                let mut buffer = vec![0; length];
-                file.read_exact(&mut buffer)
-                    .map_err(|err| Error::Io(err.to_string()))?;
-                Ok(buffer)
-            }
+            Some(Source::Bytes(bytes)) => Ok(SourceReader::Bytes(bytes)),
+            Some(Source::Path(path)) => Ok(SourceReader::Path(path.clone(), None)),
             None => Err(Error::InvalidData {
-                offset,
+                offset: 0,
                 reason: "the file of a deferred element is gone",
             }),
         }
