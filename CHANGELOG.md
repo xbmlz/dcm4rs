@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 — 2026-11-19
+
+### Added
+
+- `iter_frames` streams a deferred native Pixel Data: with `ReadOptions::defer_size` the stored
+  samples never enter the data set, and each frame is read from the source as it is asked for. A
+  file read from disk keeps one handle open for the iteration instead of reopening it per frame.
+  `pixel_descriptor`, `pixel_frames`, `decode_frame` and `decode_pixel_data` still read the whole
+  element back first, as before.
+
+### Changed
+
+- `DeferredElement` carries `offset`: where the value it stands for starts in the source, counted
+  from the start of the file the read came from. Code that builds one with a struct literal must
+  supply it.
+- A file whose Pixel Data was deferred now iterates its frames instead of failing on the missing
+  element. Encapsulated Pixel Data is still never deferred, because its items are read as items
+  rather than as a value.
+
 ## 0.3.0 — 2026-11-19
 
 ### Added
