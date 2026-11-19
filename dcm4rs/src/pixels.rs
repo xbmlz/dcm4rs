@@ -22,7 +22,7 @@ use crate::dataset::DataSet;
 use crate::dictionary::tags;
 use crate::endian::Endian;
 use crate::error::{Error, Result};
-use crate::file::DicomFile;
+use crate::file::{DicomFile, SourceReader};
 use crate::transfer_syntax::TransferSyntax;
 use crate::value::Value;
 use crate::vr::Vr;
@@ -572,7 +572,7 @@ impl DicomFile {
         }
         Ok(Frames {
             encoded: Encoded::NativeSource {
-                file: self,
+                reader: self.source_reader()?,
                 offset,
                 remaining: descriptor.number_of_frames as usize,
             },
@@ -764,7 +764,7 @@ enum Encoded<'a> {
     Native(&'a [u8]),
     /// Native Pixel Data the read left in the file: each frame is read from the source.
     NativeSource {
-        file: &'a DicomFile,
+        reader: SourceReader<'a>,
         offset: usize,
         remaining: usize,
     },
@@ -787,7 +787,7 @@ impl Iterator for Frames<'_> {
                 Some(decode_frame_bytes(self.syntax, &self.descriptor, frame))
             }
             Encoded::NativeSource {
-                file,
+                reader,
                 offset,
                 remaining,
             } => {
@@ -796,7 +796,7 @@ impl Iterator for Frames<'_> {
                 }
                 *remaining -= 1;
                 let frame_size = self.descriptor.stored_frame_size();
-                let frame = match file.source_range(*offset, frame_size) {
+                let frame = match reader.read_at(*offset, frame_size) {
                     Ok(frame) => frame,
                     Err(err) => {
                         *remaining = 0;
