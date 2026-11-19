@@ -47,3 +47,41 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  features:
+    name: Features (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: none
+            args: ""
+          - name: pixel-jpeg
+            args: "--features pixel-jpeg"
+          - name: pixel-jpegls
+            args: "--features pixel-jpegls"
+          - name: pixel-j2k
+            args: "--features pixel-j2k"
+          - name: pixel-jxl
+            args: "--features pixel-jxl"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache pylibjpeg-data
+        uses: actions/cache@v4
+        with:
+          path: .cache/pylibjpeg-data
+          key: pylibjpeg-data-v1
+          restore-keys: pylibjpeg-data-
+      - name: Fetch pylibjpeg-data
+        run: sh scripts/fetch-pylibjpeg-data.sh
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
+      # The all-features job hides a feature that only compiles alongside another, so each
+      # feature is built and tested on its own here.
+      - name: Test
+        run: cargo test -p dcm4rs --no-default-features ${{ matrix.args }}
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data

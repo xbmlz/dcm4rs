@@ -899,3 +899,35 @@ fn jxl_compression_round_trips_exactly() {
     );
     assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
 }
+
+#[cfg(feature = "pixel-jxl")]
+#[test]
+fn jxl_sixteen_bit_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 16, 1, "MONOCHROME2");
+    let samples: [u16; 4] = [0x1234, 0x89AB, 0x0001, 0xFFFE];
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ow, Value::from_u16s(&samples));
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jxl().expect("compress");
+    let expected: Vec<u8> = samples
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    assert_eq!(file.decode_frame(0).expect("frame"), expected);
+}
+
+#[cfg(feature = "pixel-jxl")]
+#[test]
+fn jxl_multi_frame_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 2, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40, 50, 60, 70, 80]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jxl().expect("compress");
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+    assert_eq!(file.decode_frame(1).expect("frame"), vec![50, 60, 70, 80]);
+}
