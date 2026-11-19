@@ -141,8 +141,28 @@ let mapped = file.apply_color_lut(0).unwrap();
 ### Streaming
 
 `iter_frames` decodes one frame at a time, so a long multi-frame image never holds its decoded
-form in memory twice. `pixel_frames` still returns every encoded frame at once when that is what
-you want.
+form in memory twice. With `ReadOptions::defer_size` the stored samples are not read either: a
+native frame is read from the source when it is asked for, so a file larger than its frames still
+needs only one frame's bytes and samples in memory.
+
+```rust
+let options = ReadOptions {
+    defer_size: 1 << 20,
+    ..ReadOptions::default()
+};
+let file = DicomFile::read_file_with_options("volume.dcm", options).unwrap();
+for frame in file.iter_frames().unwrap() {
+    let samples = frame.unwrap();
+    // one frame at a time, the rest still in the file
+}
+```
+
+The source of a file read from disk is opened on the first frame and kept open for the iteration.
+Replacing the file mid-iteration leaves later frames reading the handle that was opened, and
+deleting it under Unix does the same; the next frame reports the error on Windows. Encapsulated
+Pixel Data is not deferred, because its items are read as items rather than as a value, so its
+compressed frames are still collected up front — those are the compressed bytes, not the samples.
+`pixel_frames` returns every encoded frame at once when that is what you want.
 
 ### Decompressing
 

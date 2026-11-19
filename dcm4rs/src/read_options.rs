@@ -26,6 +26,10 @@ pub struct ReadOptions {
     /// the data set until [`crate::DicomFile::load_element`] reads it back from the file. Only a
     /// source that can be read again — the bytes passed to `read`, or the path passed to
     /// `read_file` — can defer.
+    ///
+    /// Deferring Pixel Data is what makes [`crate::DicomFile::iter_frames`] stream: with it, each
+    /// native frame is read from the source when it is asked for instead of holding the samples
+    /// all at once.
     pub defer_size: usize,
 
     /// Read a byte stream that carries no Part 10 preamble and `DICM` prefix as a bare data set,

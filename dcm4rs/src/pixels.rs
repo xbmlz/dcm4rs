@@ -440,19 +440,27 @@ impl DicomFile {
         if syntax.is_encapsulated() {
             return self.dataset.encapsulated_frames();
         }
-        let element = self.dataset.element(tags::PIXEL_DATA)?;
-        let Some(bytes) = element.value.as_bytes() else {
-            return Err(Error::InvalidPixelData(
-                "Pixel Data is not a byte value".to_owned(),
-            ));
-        };
-        let frame_size = descriptor.stored_frame_size();
-        if frame_size == 0 {
-            return Err(Error::InvalidPixelData("frame size is zero".to_owned()));
+        let mut frames = Vec::with_capacity(descriptor.number_of_frames as usize);
+        for index in 0..descriptor.number_of_frames as usize {
+            frames.push(self.native_frame_bytes(index)?.to_vec());
         }
-        let expected = frame_size
-            .checked_mul(descriptor.number_of_frames as usize)
-            .ok_or_else(|| Error::InvalidPixelData("pixel data size overflows".to_owned()))?;
+        Ok(frames)
+    }
+
+    /// The stored bytes of one native frame.
+    ///
+    /// The checks that a read cannot make, because a data set is built as well as read, live here
+    /// and run for every frame.
+    fn native_frame_bytes(&self, index: usize) -> Result<&[u8]> {
+        let descriptor = self.dataset.pixel_descriptor()?;
+        let bytes = self
+            .dataset
+            .element(tags::PIXEL_DATA)?
+            .value
+            .as_bytes()
+            .unwrap_or_default();
+        let frame_size = descriptor.stored_frame_size();
+        let expected = frame_size.saturating_mul(descriptor.number_of_frames as usize);
         if bytes.len() < expected {
             return Err(Error::InvalidPixelData(format!(
                 "Pixel Data has {} bytes, {expected} required for {} frame(s)",
@@ -460,19 +468,36 @@ impl DicomFile {
                 descriptor.number_of_frames
             )));
         }
-        Ok((0..descriptor.number_of_frames as usize)
-            .map(|index| bytes[index * frame_size..(index + 1) * frame_size].to_vec())
-            .collect())
+        let start = index * frame_size;
+        bytes.get(start..start + frame_size).ok_or_else(|| {
+            Error::InvalidPixelData(format!(
+                "frame index {index} out of range (have {})",
+                descriptor.number_of_frames
+            ))
+        })
     }
 
     /// Decode one frame (zero-based).
     ///
     /// Native transfer syntaxes return the stored bytes. Encapsulated transfer syntaxes are
     /// decoded by their codec; RLE Lossless is supported, other codecs report
-    /// [`Error::UnsupportedPixelData`].
+    /// [`Error::UnsupportedPixelData`]. A deferred Pixel Data is streamed, so one call reads one
+    /// frame instead of the whole element.
     pub fn decode_frame(&self, index: usize) -> Result<Vec<u8>> {
         let descriptor = self.dataset.pixel_descriptor()?;
         let syntax = self.transfer_syntax()?;
+        if self.is_deferred(tags::PIXEL_DATA) {
+            return match self.iter_frames()?.nth(index) {
+                Some(frame) => frame,
+                None => Err(Error::InvalidPixelData(format!(
+                    "frame index {index} out of range (have {})",
+                    descriptor.number_of_frames
+                ))),
+            };
+        }
+        if !syntax.is_encapsulated() {
+            return decode_frame_bytes(syntax, &descriptor, self.native_frame_bytes(index)?);
+        }
         let frames = self.pixel_frames()?;
         let frame = frames.get(index).ok_or_else(|| {
             Error::InvalidPixelData(format!(

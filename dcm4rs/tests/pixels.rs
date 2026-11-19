@@ -1007,6 +1007,18 @@ fn deferred_pixel_data_streams_frames() {
         .collect();
     let plain = DicomFile::read(&bytes).unwrap();
     assert_eq!(streamed, plain.decode_pixel_data().unwrap());
+    for index in 0..3 {
+        assert_eq!(
+            deferred.decode_frame(index).unwrap(),
+            plain.decode_frame(index).unwrap()
+        );
+    }
+    match deferred.decode_frame(3) {
+        Err(Error::InvalidPixelData(message)) => {
+            assert!(message.contains("out of range"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
 
     // The same, with the source being a file on disk rather than bytes in memory.
     let mut path = std::env::temp_dir();
@@ -1068,4 +1080,29 @@ fn a_gone_source_fails_the_next_frame() {
     let first = frames.next().expect("one error");
     assert!(first.is_err(), "{first:?}");
     assert!(frames.next().is_none(), "iteration stops after the error");
+}
+#[test]
+fn a_short_native_pixel_data_reports_the_required_size() {
+    let mut set = pixel_set(2, 2, 1, 16, 2, "MONOCHROME2");
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(vec![0; 6]));
+    let file = file(set, EXPLICIT_LE_UID);
+    match file.decode_frame(0) {
+        Err(Error::InvalidPixelData(message)) => {
+            assert!(message.contains("required for 2 frame(s)"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_frame_index_past_the_native_frames_is_out_of_range() {
+    let mut set = pixel_set(2, 2, 1, 16, 2, "MONOCHROME2");
+    let _ = set.set(tags::PIXEL_DATA, Vr::Ob, Value::from_bytes(vec![0; 16]));
+    let file = file(set, EXPLICIT_LE_UID);
+    match file.decode_frame(2) {
+        Err(Error::InvalidPixelData(message)) => {
+            assert!(message.contains("out of range"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
 }
