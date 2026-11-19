@@ -10,6 +10,8 @@ keywords = ["dicom", "medical", "imaging"]
 categories = ["parser-implementations", "encoding"]
 readme = "../README.md"
 documentation = "https://docs.rs/dcm4rs"
+repository = "https://github.com/xbmlz/dcm4rs"
+homepage = "https://github.com/xbmlz/dcm4rs"
 
 [features]
 default = ["pixel-jpeg"]
