@@ -880,3 +880,22 @@ fn j2k_compression_round_trips_exactly() {
     );
     assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
 }
+
+#[cfg(feature = "pixel-jxl")]
+#[test]
+fn jxl_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_jxl().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.110"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+}

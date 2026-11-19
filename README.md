@@ -172,8 +172,8 @@ Implemented: data model and dictionary, Part 10 read/write, character set conver
 private dictionary registration, private creator blocks, deferred reads, the DICOM JSON model
 (PS3.18 F.2), modality and VOI LUTs, media storage directories (the DICOMDIR), waveform decoding,
 typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), RLE Lossless, baseline
-JPEG, JPEG-LS and JPEG 2000 encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG / JPEG-LS /
-JPEG 2000 / JPEG XL decoding.
+JPEG, JPEG-LS, JPEG 2000 and JPEG XL encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG /
+JPEG-LS / JPEG 2000 / JPEG XL decoding.
 
 MPEG video stays undecoded on purpose — as far as dcm4che goes, and no further. Frames come out
 of `encapsulated_frames` as the compressed bitstreams they are, `mpeg2_sequence_header` reads the
@@ -183,8 +183,6 @@ asking for a pixel reports `Error::UnsupportedPixelData`.
 Not implemented yet:
 
 - Network services (association, C-FIND / C-MOVE / C-GET) as a separate `dcm4rs-net` package.
-- Compressing pixel data with JPEG XL: `jxl-oxide` only decodes, so RLE Lossless, baseline JPEG,
-  JPEG-LS and JPEG 2000 are the encodings written.
 
 Where dcm4rs deliberately differs from pydicom, the difference is pinned by a test:
 

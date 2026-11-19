@@ -685,6 +685,52 @@ impl DicomFile {
     }
 }
 
+#[cfg(feature = "pixel-jxl")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG XL Lossless.
+    ///
+    /// 8- and 16-bit gray or colour frames are written as bare codestreams; the modular
+    /// pathway keeps the samples exact.
+    pub fn compress_jxl(&mut self) -> Result<()> {
+        use zenjxl::{LosslessConfig, PixelLayout};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        let layout = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
+            (1, 8) => PixelLayout::Gray8,
+            (3, 8) => PixelLayout::Rgb8,
+            (1, 16) => PixelLayout::Gray16,
+            (3, 16) => PixelLayout::Rgb16,
+            (samples, bits) => {
+                return Err(Error::InvalidPixelData(format!(
+                    "JPEG XL writes 8- and 16-bit gray or colour, this image has {samples} \
+                     sample(s) of {bits} bits"
+                )))
+            }
+        };
+        let config = LosslessConfig::new();
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            encoded.push(
+                config
+                    .encode(
+                        frame,
+                        u32::from(descriptor.columns),
+                        u32::from(descriptor.rows),
+                        layout,
+                    )
+                    .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?,
+            );
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.110")
+    }
+}
+
 fn decode_frame_bytes(
     syntax: TransferSyntax,
     descriptor: &PixelDescriptor,
