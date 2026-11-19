@@ -72,12 +72,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "compcol"
-version = "0.6.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6f29da98742f258743e8bb44b09f0cc1cbca2591e709b1bb85ccd6e9111f431"
-
-[[package]]
 name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -103,9 +97,10 @@ dependencies = [
  "jpeg2k",
  "jxl-oxide",
  "oxiarc-jpeg",
- "oxideav-jpegxl",
  "serde_json",
+ "zune-core 0.5.3",
  "zune-jpeg",
+ "zune-jpegxl",
 ]
 
 [[package]]
@@ -396,15 +391,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-jpegxl"
-version = "0.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26c747bed4f38b964f449a07eae543d0cec3304e32895690fbc6455d3ee06757"
-dependencies = [
- "compcol",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -575,10 +561,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
 
 [[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
 name = "zune-jpeg"
 version = "0.4.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
 dependencies = [
- "zune-core",
+ "zune-core 0.4.12",
+]
+
+[[package]]
+name = "zune-jpegxl"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cba11ecd07cc23351500e840ae03841b7e4997923ec8e4832ee3ae199ea0b6b4"
+dependencies = [
+ "zune-core 0.5.3",
 ]

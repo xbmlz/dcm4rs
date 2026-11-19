@@ -689,11 +689,13 @@ impl DicomFile {
 impl DicomFile {
     /// Replace native Pixel Data with JPEG XL Lossless.
     ///
-    /// `oxideav-jpegxl` writes the 8- and 16-bit gray or colour frames through its
-    /// Modular encoder, lossless at the default quality, and emits the bare codestream
-    /// the transfer syntax carries.
+    /// `zune-jpegxl` encodes 8- and 16-bit gray or colour frames losslessly and writes
+    /// the bare codestream the transfer syntax carries.
     pub fn compress_jxl(&mut self) -> Result<()> {
-        use oxideav_jpegxl::{encode, EncodeOptions, JxlImage, PixelFormat};
+        use zune_core::bit_depth::BitDepth;
+        use zune_core::colorspace::ColorSpace;
+        use zune_core::options::EncoderOptions;
+        use zune_jpegxl::JxlSimpleEncoder;
 
         let descriptor = self.dataset.pixel_descriptor()?;
         if self.transfer_syntax()?.is_encapsulated() {
@@ -701,11 +703,11 @@ impl DicomFile {
                 "Pixel Data is already encapsulated".to_owned(),
             ));
         }
-        let (format, bits) = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
-            (1, 8) => (PixelFormat::Gray8, 8),
-            (3, 8) => (PixelFormat::Rgb24, 8),
-            (1, 16) => (PixelFormat::Gray16Le, 16),
-            (3, 16) => (PixelFormat::Rgb48Le, 16),
+        let (space, depth) = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
+            (1, 8) => (ColorSpace::Luma, BitDepth::Eight),
+            (3, 8) => (ColorSpace::RGB, BitDepth::Eight),
+            (1, 16) => (ColorSpace::Luma, BitDepth::Sixteen),
+            (3, 16) => (ColorSpace::RGB, BitDepth::Sixteen),
             (samples, bits) => {
                 return Err(Error::InvalidPixelData(format!(
                     "JPEG XL writes 8- and 16-bit gray or colour, this image has {samples} \
@@ -713,22 +715,26 @@ impl DicomFile {
                 )))
             }
         };
-        let options = EncodeOptions::new();
+        let width = usize::from(descriptor.columns);
+        let height = usize::from(descriptor.rows);
+        let frame_len = width
+            * usize::from(descriptor.samples_per_pixel)
+            * height
+            * (usize::from(descriptor.bits_allocated) / 8);
         let frames = self.pixel_frames()?;
         let mut encoded = Vec::with_capacity(frames.len());
         for frame in &frames {
-            let image = JxlImage::packed(
-                u32::from(descriptor.columns),
-                u32::from(descriptor.rows),
-                format,
-                frame.to_vec(),
-            )
-            .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?
-            .with_bits_per_sample(bits);
-            encoded.push(
-                encode(&image, &options)
-                    .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?,
-            );
+            let samples = frame.get(..frame_len).ok_or_else(|| {
+                Error::InvalidPixelData(format!(
+                    "frame holds {} bytes, JPEG XL needs {frame_len}",
+                    frame.len()
+                ))
+            })?;
+            let mut codestream = Vec::new();
+            JxlSimpleEncoder::new(samples, EncoderOptions::new(width, height, space, depth))
+                .encode(&mut codestream)
+                .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?;
+            encoded.push(codestream);
         }
         self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.110")
     }
