@@ -689,10 +689,11 @@ impl DicomFile {
 impl DicomFile {
     /// Replace native Pixel Data with JPEG XL Lossless.
     ///
-    /// 8- and 16-bit gray or colour frames are written as bare codestreams; the modular
-    /// pathway keeps the samples exact.
+    /// `oxideav-jpegxl` writes the 8- and 16-bit gray or colour frames through its
+    /// Modular encoder, lossless at the default quality, and emits the bare codestream
+    /// the transfer syntax carries.
     pub fn compress_jxl(&mut self) -> Result<()> {
-        use zenjxl::{LosslessConfig, PixelLayout};
+        use oxideav_jpegxl::{encode, EncodeOptions, JxlImage, PixelFormat};
 
         let descriptor = self.dataset.pixel_descriptor()?;
         if self.transfer_syntax()?.is_encapsulated() {
@@ -700,11 +701,11 @@ impl DicomFile {
                 "Pixel Data is already encapsulated".to_owned(),
             ));
         }
-        let layout = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
-            (1, 8) => PixelLayout::Gray8,
-            (3, 8) => PixelLayout::Rgb8,
-            (1, 16) => PixelLayout::Gray16,
-            (3, 16) => PixelLayout::Rgb16,
+        let (format, bits) = match (descriptor.samples_per_pixel, descriptor.bits_allocated) {
+            (1, 8) => (PixelFormat::Gray8, 8),
+            (3, 8) => (PixelFormat::Rgb24, 8),
+            (1, 16) => (PixelFormat::Gray16Le, 16),
+            (3, 16) => (PixelFormat::Rgb48Le, 16),
             (samples, bits) => {
                 return Err(Error::InvalidPixelData(format!(
                     "JPEG XL writes 8- and 16-bit gray or colour, this image has {samples} \
@@ -712,18 +713,20 @@ impl DicomFile {
                 )))
             }
         };
-        let config = LosslessConfig::new();
+        let options = EncodeOptions::new();
         let frames = self.pixel_frames()?;
         let mut encoded = Vec::with_capacity(frames.len());
         for frame in &frames {
+            let image = JxlImage::packed(
+                u32::from(descriptor.columns),
+                u32::from(descriptor.rows),
+                format,
+                frame.to_vec(),
+            )
+            .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?
+            .with_bits_per_sample(bits);
             encoded.push(
-                config
-                    .encode(
-                        frame,
-                        u32::from(descriptor.columns),
-                        u32::from(descriptor.rows),
-                        layout,
-                    )
+                encode(&image, &options)
                     .map_err(|err| Error::InvalidPixelData(format!("JPEG XL encoder: {err}")))?,
             );
         }
