@@ -229,7 +229,8 @@ private dictionary registration, private creator blocks, deferred reads, the DIC
 (PS3.18 F.2), modality and VOI LUTs, media storage directories (the DICOMDIR), waveform decoding,
 typed views for the structured VRs (`PN`, `DS`, `IS`, `DA`, `TM` and `DT`), UID generation under the
 `2.25.` UUID root, colour conversion and palette colour lookup, pixel data write-back and
-decompression, dataset walking, private tag removal and group selection, `write_file`, lazy
+decompression, dataset walking and the `formatted_lines` dump, private tag removal and group
+selection, `write_file`, reading from any byte stream and from files without a preamble, lazy
 frame iteration, RLE Lossless, baseline
 JPEG, JPEG-LS, JPEG 2000 and JPEG XL encoding, and RLE / JPEG Lossless / 8-bit and 12-bit JPEG /
 JPEG-LS / JPEG 2000 / JPEG XL decoding.

@@ -4,8 +4,10 @@
 //! error, not something to paper over. Every relaxation has to be asked for, so a file that
 //! breaks the standard never slips through unnoticed.
 
+use crate::transfer_syntax::TransferSyntax;
+
 /// Reading behaviour for files written by implementations that depart from the standard.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReadOptions {
     /// Read an undefined length on an element whose VR is neither a sequence nor a byte value by
     /// scanning forward to its item delimiter, as pydicom does.
@@ -25,4 +27,27 @@ pub struct ReadOptions {
     /// source that can be read again — the bytes passed to `read`, or the path passed to
     /// `read_file` — can defer.
     pub defer_size: usize,
+
+    /// Read a byte stream that carries no Part 10 preamble and `DICM` prefix as a bare data set,
+    /// the way pydicom's `dcmread(..., force=True)` does.
+    ///
+    /// The bytes are parsed whole with [`assumed_syntax`](Self::assumed_syntax), and the file
+    /// meta of the result carries only `(0002,0010)`, so encoding the file again produces the
+    /// part 10 wrapper it was missing. A stream that does carry the prefix is read normally.
+    pub no_preamble: bool,
+
+    /// The transfer syntax [`no_preamble`](Self::no_preamble) assumes, since a bare data set
+    /// gives no way to tell. The default is Implicit VR Little Endian, what pydicom assumes.
+    pub assumed_syntax: TransferSyntax,
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self {
+            lenient_undefined_length: false,
+            defer_size: 0,
+            no_preamble: false,
+            assumed_syntax: TransferSyntax::ImplicitVrLittleEndian,
+        }
+    }
 }

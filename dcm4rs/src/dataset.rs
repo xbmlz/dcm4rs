@@ -335,6 +335,180 @@ impl DataSet {
         }
         set
     }
+
+    /// One line per element, in the flat order pydicom's `Dataset.formatted_lines` yields.
+    ///
+    /// A line is the tag, the standard name padded to 35 characters, the VR and a short
+    /// representation of the value: text in quotes, numbers as written, a UID by its registry
+    /// name, a sequence as `<Sequence, length 2>`, and a long or many-valued value as
+    /// `Array of 12 elements`. Values are decoded with this data set's byte order and character
+    /// set, and the items of a sequence come right after their sequence element.
+    pub fn formatted_lines(&self) -> impl Iterator<Item = String> + '_ {
+        let endian = self.endian;
+        let charset = self.charset().unwrap_or_default();
+        self.walk()
+            .map(move |element| format_line(element, endian, charset))
+    }
+}
+
+/// Longest value pydicom prints before summarizing it (`DataElement.maxBytesToDisplay`).
+const MAX_DISPLAY: usize = 128;
+
+/// One `formatted_lines` line.
+fn format_line(element: &Element, endian: Endian, charset: Charset) -> String {
+    let name = display_name(element.tag);
+    let name: String = name.chars().take(35).collect();
+    format!(
+        "{} {name:<35} {}: {}",
+        element.tag,
+        element.vr,
+        representation(element, endian, charset)
+    )
+}
+
+/// The standard name of a tag, as pydicom's `DataElement.name` reports it.
+fn display_name(tag: Tag) -> String {
+    match crate::dictionary::lookup(tag) {
+        Some(entry) => entry.name.to_owned(),
+        None if tag.is_private() => "Private tag data".to_owned(),
+        None => "Unknown Tag & Data".to_owned(),
+    }
+}
+
+/// A short form of an element's value, as pydicom's `DataElement.repval` reports it.
+fn representation(element: &Element, endian: Endian, charset: Charset) -> String {
+    match &element.value {
+        Value::Empty => String::new(),
+        Value::Bytes(bytes) if bytes.is_empty() => String::new(),
+        Value::Sequence(items) => format!("<Sequence, length {}>", items.len()),
+        Value::Fragments(fragments) => {
+            let bytes: usize = fragments.iter().map(Vec::len).sum();
+            if bytes > MAX_DISPLAY {
+                format!("Array of {bytes} elements")
+            } else {
+                format!("<{} fragments>", fragments.len())
+            }
+        }
+        Value::Bytes(bytes) => {
+            if element.vr == Vr::Ui {
+                return element.string().map_or_else(
+                    |_| String::new(),
+                    |text| {
+                        crate::uid::Uid::new(text)
+                            .map_or_else(|_| text.to_owned(), |uid| uid.name().to_owned())
+                    },
+                );
+            }
+            if element.vr.is_string() {
+                let values: Vec<String> = element
+                    .string_values_with(charset)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|value| value.into_owned())
+                    .collect();
+                if values.len() > MAX_DISPLAY {
+                    return format!("Array of {} elements", values.len());
+                }
+                let length: usize = values.iter().map(String::len).sum();
+                if element.vr.uses_long_length() && length > MAX_DISPLAY {
+                    return format!("Array of {length} elements");
+                }
+                return match element.vr {
+                    // pydicom keeps `IS`/`DS` as numbers, so they print without quotes.
+                    Vr::Is | Vr::Ds => bracketed(&values),
+                    _ => quoted(&values),
+                };
+            }
+            if let Some(values) = binary_numbers(element, endian) {
+                if values.len() > MAX_DISPLAY {
+                    return format!("Array of {} elements", values.len());
+                }
+                return bracketed(&values);
+            }
+            if bytes.len() > MAX_DISPLAY {
+                format!("Array of {} elements", bytes.len())
+            } else {
+                format!("{bytes:?}")
+            }
+        }
+    }
+}
+
+/// Decode the binary numeric VRs into their printed form.
+fn binary_numbers(element: &Element, endian: Endian) -> Option<Vec<String>> {
+    let values: Vec<String> = match element.vr {
+        Vr::Us => element
+            .u16s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Ss => element
+            .i16s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Ul => element
+            .u32s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Sl => element
+            .i32s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Uv => element
+            .u64s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Sv => element
+            .i64s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Fl => element
+            .f32s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::Fd => element
+            .f64s(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        Vr::At => element
+            .tags(endian)
+            .ok()?
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        _ => return None,
+    };
+    Some(values)
+}
+
+/// One value as it is, several as a Python-style list.
+fn bracketed(values: &[String]) -> String {
+    match values {
+        [] => String::new(),
+        [one] => one.clone(),
+        many => format!("[{}]", many.join(", ")),
+    }
+}
+
+/// Text values in single quotes, several as a list of quoted values.
+fn quoted(values: &[String]) -> String {
+    let quoted: Vec<String> = values.iter().map(|value| format!("'{value}'")).collect();
+    bracketed(&quoted)
 }
 
 /// Depth-first walk over a data set and the items of its sequences.
