@@ -43,19 +43,8 @@ impl SourceReader<'_> {
     pub(crate) fn read_at(&mut self, offset: usize, length: usize) -> Result<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
         match self {
-            Self::Bytes(bytes) => {
-                let end = offset.checked_add(length).ok_or(Error::InvalidData {
-                    offset,
-                    reason: "the deferred value offset overflows",
-                })?;
-                if end > bytes.len() {
-                    return Err(Error::InvalidData {
-                        offset,
-                        reason: "the deferred value runs past the source",
-                    });
-                }
-                Ok(bytes[offset..end].to_vec())
-            }
+            // The caller takes the offset from the reader, which saw these bytes.
+            Self::Bytes(bytes) => Ok(bytes[offset..offset + length].to_vec()),
             Self::Path(path, handle) => {
                 if handle.is_none() {
                     *handle =
