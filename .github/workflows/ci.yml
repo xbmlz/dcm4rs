@@ -83,3 +83,5 @@ jobs:
       # feature is built and tested on its own here.
       - name: Test
         run: cargo test -p dcm4rs --no-default-features ${{ matrix.args }}
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
