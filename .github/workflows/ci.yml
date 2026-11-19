@@ -69,6 +69,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Cache pylibjpeg-data
+        uses: actions/cache@v4
+        with:
+          path: .cache/pylibjpeg-data
+          key: pylibjpeg-data-v1
+          restore-keys: pylibjpeg-data-
+      - name: Fetch pylibjpeg-data
+        run: sh scripts/fetch-pylibjpeg-data.sh
+        env:
+          PYLIBJPEG_DATA_DIR: ${{ github.workspace }}/.cache/pylibjpeg-data
       # The all-features job hides a feature that only compiles alongside another, so each
       # feature is built and tested on its own here.
       - name: Test
