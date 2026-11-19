@@ -125,7 +125,9 @@ pub(super) fn decode(frame: &[u8], descriptor: &PixelDescriptor) -> Result<Vec<u
         // Pixel Representation: pydicom decodes the corpus files whose SIZ marker disagrees
         // with the data set, and the samples are interpreted as the codestream declares them.
         let signed = component.is_signed();
-        let data = component.data();
+        let data = component.data().ok_or(Error::InvalidPixelData(
+            "JPEG 2000 component has no sample data".to_owned(),
+        ))?;
         if data.len() != pixel_count {
             return Err(Error::InvalidPixelData(format!(
                 "JPEG 2000 component {sample} has {} samples, expected {pixel_count}",

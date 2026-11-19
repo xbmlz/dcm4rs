@@ -861,3 +861,22 @@ fn jpegls_compression_round_trips_exactly() {
     );
     assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
 }
+
+#[cfg(feature = "pixel-j2k")]
+#[test]
+fn j2k_compression_round_trips_exactly() {
+    let mut set = pixel_set(2, 2, 1, 8, 1, "MONOCHROME2");
+    let _ = set.set(
+        tags::PIXEL_DATA,
+        Vr::Ob,
+        Value::from_bytes(vec![10, 20, 30, 40]),
+    );
+    let mut file = file(set, EXPLICIT_LE_UID);
+
+    file.compress_j2k().expect("compress");
+    assert_eq!(
+        file.transfer_syntax().expect("syntax").uid(),
+        "1.2.840.10008.1.2.4.90"
+    );
+    assert_eq!(file.decode_frame(0).expect("frame"), vec![10, 20, 30, 40]);
+}

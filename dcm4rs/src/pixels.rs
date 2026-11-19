@@ -587,6 +587,104 @@ impl DicomFile {
     }
 }
 
+#[cfg(feature = "pixel-j2k")]
+impl DicomFile {
+    /// Replace native Pixel Data with JPEG 2000 Lossless.
+    ///
+    /// 8- and 16-bit samples are written as one codestream per frame; the reversible 5-3
+    /// transform keeps the samples exact.
+    pub fn compress_j2k(&mut self) -> Result<()> {
+        use jpeg2k::{ColorSpace, CoreImage, CoreImageComp, EncodeParameters, Image};
+
+        let descriptor = self.dataset.pixel_descriptor()?;
+        if self.transfer_syntax()?.is_encapsulated() {
+            return Err(Error::InvalidPixelData(
+                "Pixel Data is already encapsulated".to_owned(),
+            ));
+        }
+        if !matches!(descriptor.bits_allocated, 8 | 16) {
+            return Err(Error::InvalidPixelData(
+                "JPEG 2000 writes 8- and 16-bit samples".to_owned(),
+            ));
+        }
+        let samples = usize::from(descriptor.samples_per_pixel);
+        let bytes_per_sample = descriptor.bytes_per_sample();
+        let pixel_count = usize::from(descriptor.rows) * usize::from(descriptor.columns);
+        let signed = descriptor.pixel_representation == PixelRepresentation::Signed;
+        let planar = descriptor.planar_configuration == PlanarConfiguration::Planar;
+        // A DWT cannot split a small image as many times as the default six resolutions allow.
+        let mut resolutions = 1u32;
+        while resolutions < 6
+            && (1u32 << resolutions) <= u32::from(descriptor.columns.min(descriptor.rows))
+        {
+            resolutions += 1;
+        }
+        let frames = self.pixel_frames()?;
+        let mut encoded = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let comps = (0..samples)
+                .map(|sample| {
+                    let data = (0..pixel_count)
+                        .map(|pixel| {
+                            let index = if planar {
+                                (sample * pixel_count + pixel) * bytes_per_sample
+                            } else {
+                                (pixel * samples + sample) * bytes_per_sample
+                            };
+                            match (bytes_per_sample, signed) {
+                                (1, false) => i32::from(frame[index]),
+                                (1, true) => i32::from(frame[index] as i8),
+                                (_, false) => {
+                                    i32::from(u16::from_le_bytes([frame[index], frame[index + 1]]))
+                                }
+                                (_, true) => {
+                                    i32::from(i16::from_le_bytes([frame[index], frame[index + 1]]))
+                                }
+                            }
+                        })
+                        .collect();
+                    CoreImageComp {
+                        dx: 1,
+                        dy: 1,
+                        w: u32::from(descriptor.columns),
+                        h: u32::from(descriptor.rows),
+                        x0: 0,
+                        y0: 0,
+                        prec: u32::from(descriptor.bits_stored),
+                        bpp: u32::from(descriptor.bits_allocated),
+                        sgnd: u32::from(signed),
+                        resno_decoded: 0,
+                        factor: 0,
+                        alpha: 0,
+                        data,
+                    }
+                })
+                .collect();
+            let image = Image::from_core_image(CoreImage {
+                x0: 0,
+                y0: 0,
+                x1: u32::from(descriptor.columns),
+                y1: u32::from(descriptor.rows),
+                numcomps: u32::from(descriptor.samples_per_pixel),
+                color_space: if samples >= 3 {
+                    ColorSpace::Srgb
+                } else {
+                    ColorSpace::Gray
+                },
+                comps,
+                icc_profile_buf: Vec::new(),
+                icc_profile_is_cielab: false,
+            });
+            encoded.push(
+                image
+                    .encode(EncodeParameters::new().num_resolutions(resolutions))
+                    .map_err(|err| Error::InvalidPixelData(format!("JPEG 2000 encoder: {err}")))?,
+            );
+        }
+        self.set_encapsulated(encoded, "1.2.840.10008.1.2.4.90")
+    }
+}
+
 fn decode_frame_bytes(
     syntax: TransferSyntax,
     descriptor: &PixelDescriptor,
