@@ -1,11 +1,13 @@
 [package]
-name = "cli"
-description = "Command-line tools built on dcm4rs (dictionary generator, etc.)"
+name = "dcm4rs-cli"
+description = "Command-line tools built on dcm4rs: inspect, dump and decompress DICOM files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish = false
+repository = "https://github.com/xbmlz/dcm4rs"
+homepage = "https://github.com/xbmlz/dcm4rs"
+publish = ["crates-io"]
 
 [dependencies]
 dcm4rs.workspace = true

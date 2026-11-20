@@ -56,13 +56,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cli"
-version = "0.4.0"
-dependencies = [
- "dcm4rs",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -101,6 +94,13 @@ dependencies = [
  "zune-core 0.5.3",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "dcm4rs-cli"
+version = "0.4.0"
+dependencies = [
+ "dcm4rs",
 ]
 
 [[package]]

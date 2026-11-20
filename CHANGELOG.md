@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `dcm4rs-cli` now builds a `dcm4rs` binary (`info`, `dump`, `decompress`) and can be installed
+  with `cargo install dcm4rs-cli`. The package was called `cli` and was not published.
+
 ## 0.4.0 — 2026-11-19
 
 ### Added
