@@ -27,7 +27,7 @@ media storage directories and waveform decoding are part of the library.
 
 ```toml
 [dependencies]
-dcm4rs = "0.2"
+dcm4rs = "0.4"
 ```
 
 Rust 1.75 or newer is required. The default `pixel-jpeg` feature decodes eight-bit and 12-bit
@@ -42,6 +42,19 @@ JPEG; the remaining codecs are opt-in:
 
 JPEG Lossless (Process 14 and Selection Value 1) needs no feature: it is pure Rust in the core,
 next to RLE Lossless.
+
+## Command line
+
+`dcm4rs-cli` builds a `dcm4rs` binary that reads files with the library:
+
+```bash
+cargo install dcm4rs-cli
+
+dcm4rs info scan.dcm        # transfer syntax, patient, pixel summary
+dcm4rs dump scan.dcm        # one line per element, like pydicom
+dcm4rs dump scan.dcm --limit 20
+dcm4rs decompress in.dcm out.dcm   # decode the frames, write native Pixel Data
+```
 
 ## Documentation
 
@@ -202,10 +215,10 @@ samples and keeps `Number of Frames` in step with their length.
 ## Data dictionary
 
 The PS3.6 dictionary is generated and committed, so building needs no network access: 5212
-standard elements and 88 repeating groups. Regenerate it with the generator in `cli`:
+standard elements and 88 repeating groups. Regenerate it with the generator in `dcm4rs-cli`:
 
 ```bash
-cargo run -p cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
+cargo run -p dcm4rs-cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
 ```
 
 See [data/README.md](data/README.md) for the source files.
@@ -238,7 +251,7 @@ The workspace:
 ```
 Cargo.toml  virtual workspace
 dcm4rs/     library: Tag / Vr / Value / Element / DataSet, dictionary, file and pixel I/O
-cli/        command-line tools; depends on dcm4rs, is not part of the library API
+cli/        package `dcm4rs-cli`: the `dcm4rs` command and the dictionary generator
 data/       PS3.6 DocBook source (not committed)
 ```
 

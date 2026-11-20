@@ -3,7 +3,7 @@
 //! Usage:
 //!
 //! ```text
-//! cargo run -p cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
+//! cargo run -p dcm4rs-cli --bin dictgen -- data/part06.xml dcm4rs/src/dictionary/generated.rs
 //! ```
 
 use std::collections::{BTreeMap, HashSet};
